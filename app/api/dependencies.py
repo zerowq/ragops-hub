@@ -6,6 +6,7 @@ from functools import lru_cache
 from fastapi import Header, HTTPException
 
 from app.agent.intent import IntentRouter
+from app.agent.memory import ConversationMemoryService
 from app.agent.service import EnterpriseAgentService
 from app.agent.tools import CustomerServiceTools
 from app.core.config import get_settings
@@ -72,6 +73,12 @@ class Container:
             else ExtractiveAnswerGenerator()
         )
         self.tools = CustomerServiceTools(self.repository)
+        self.memory = ConversationMemoryService(
+            self.repository,
+            settings.memory_recent_messages,
+            settings.memory_summary_trigger_messages,
+            settings.memory_summary_max_chars,
+        )
         self.agent = EnterpriseAgentService(
             self.repository,
             PromptInjectionGuard(),
@@ -79,6 +86,7 @@ class Container:
             self.retriever,
             generator,
             self.tools,
+            self.memory,
         )
 
     async def startup(self) -> int:

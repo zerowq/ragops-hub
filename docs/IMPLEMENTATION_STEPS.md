@@ -36,36 +36,52 @@ Reranker。
 
 知识点：Metadata Filter、Top-K 污染、数据泄漏风险、ABAC。
 
-## 第六步：Agent 工作流
+## 第六步：Case 级会话记忆
+
+消息持久化后按 tenant、user 和 conversation 读取。最近消息保留原文，超过阈值的较早消息生成
+确定性摘要；疑似追问才把有限历史和 Case 业务字段补充到检索 Query。工单准备阶段冻结摘要、最近
+对话和客户/订单关联，形成可审计的交接快照。
+
+知识点：短期记忆、滑动窗口、摘要、Query Rewrite、上下文预算、租户隔离、人工交接。
+
+## 第七步：客户历史工单与相似问题
+
+历史工单只在当前客服已被分配给 Support Case 后读取，并按 tenant 与 customer_user_id 限定范围。
+`tickets_fts` 为主题、描述和处理结果建立持久倒排索引，工作台展示历史工单和相似已解决问题；Agent
+将其作为参考上下文，而不作为订单、客户状态等事实真源。
+
+知识点：Customer 360、Helpdesk 集成、FTS5、相似案例检索、业务事实真源、PII 与数据保留。
+
+## 第八步：Agent 工作流
 
 Agent 先经过 Prompt Injection 检查，再进行意图路由。知识问题进入 RAG；订单问题进入只读工具；
 工单请求先保存 Pending Action，用户确认后才执行写工具。
 
 知识点：确定性工作流、Tool Calling、Human-in-the-loop、副作用治理。
 
-## 第七步：工具安全
+## 第九步：工具安全
 
 普通用户查询订单同时使用 order_id、tenant_id 和 user_id；客服查询还校验 support role 和已分配
 Support Case，防止通过修改订单号读取未授权客户数据。每个待确认动作有服务端 action_id，工单使用
-action_id 生成幂等键并执行原子写入，同时关联 Case、Customer 和 Order。
+action_id 生成幂等键并执行原子写入，同时关联 Case、Customer 和 Order，并保存工单交接摘要。
 
 知识点：对象级权限、幂等、审计、参数校验、工具最小权限。
 
-## 第八步：SSE 协议
+## 第十步：SSE 协议
 
 后端将 Agent 生命周期编码为具名 SSE 事件，而非只发送字符串。前端根据 event 类型分别展示检索、
-工具、Token、引用和错误。
+Memory、客户历史、工具、Token、引用和错误。
 
 知识点：`text/event-stream`、POST 流式响应、代理缓冲、客户端断开、结构化事件。
 
-## 第九步：离线评测
+## 第十一步：离线评测
 
 JSONL 数据集保存问题、预期来源和关键术语。脚本计算 Source Recall@K、MRR 和平均检索耗时，并输出
 每题排名，便于比较 Dense、BM25、Hybrid 和 Reranker。
 
 知识点：可重复评测、基线、检索指标、错误分析、参数选择。
 
-## 第十步：双运行模式和交付
+## 第十二步：双运行模式和交付
 
 离线模式不需要外部服务，方便开发测试；Docker Compose 模式启动 etcd、MinIO、Milvus 和可选应用
 容器，模拟独立向量服务、持久化和健康检查。

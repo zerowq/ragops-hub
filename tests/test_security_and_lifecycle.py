@@ -80,6 +80,29 @@ def test_conversation_id_cannot_be_overwritten_by_another_principal(
     assert repository.get_pending_action("shared-id", owner) == owner_action
 
 
+def test_conversation_memory_cannot_be_read_by_another_principal(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteRepository(tmp_path / "memory-isolation.db")
+    owner = Principal("owner", "tenant-a", "support")
+    same_tenant_attacker = Principal("attacker", "tenant-a", "support")
+    cross_tenant_attacker = Principal("attacker", "tenant-b", "support")
+    repository.save_message("case-secret", owner, "user", "private customer issue")
+
+    with pytest.raises(PermissionError):
+        repository.get_conversation_memory(
+            "case-secret",
+            same_tenant_attacker,
+            8,
+        )
+    with pytest.raises(PermissionError):
+        repository.get_conversation_memory(
+            "case-secret",
+            cross_tenant_attacker,
+            8,
+        )
+
+
 @pytest.mark.asyncio
 async def test_ingestion_compensates_vector_write_when_metadata_save_fails(
     tmp_path: Path,

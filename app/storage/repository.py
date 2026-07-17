@@ -28,6 +28,7 @@ class SQLiteRepository:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.fts_enabled = False
+        self.ticket_fts_enabled = False
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -124,6 +125,11 @@ class SQLiteRepository:
                 description TEXT NOT NULL,
                 status TEXT NOT NULL,
                 idempotency_key TEXT NOT NULL,
+                customer_user_id TEXT NOT NULL DEFAULT '',
+                case_id TEXT NOT NULL DEFAULT '',
+                order_id TEXT NOT NULL DEFAULT '',
+                handoff_summary TEXT NOT NULL DEFAULT '',
+                resolution TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 UNIQUE(tenant_id, idempotency_key)
             )
@@ -133,7 +139,11 @@ class SQLiteRepository:
                 id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL,
                 user_id TEXT NOT NULL,
+                case_id TEXT NOT NULL DEFAULT '',
                 pending_action_json TEXT,
+                summary TEXT NOT NULL DEFAULT '',
+                summarized_message_count INTEGER NOT NULL DEFAULT 0,
+                summary_updated_at TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -194,11 +204,30 @@ class SQLiteRepository:
                 "customer_user_id": "TEXT NOT NULL DEFAULT ''",
                 "case_id": "TEXT NOT NULL DEFAULT ''",
                 "order_id": "TEXT NOT NULL DEFAULT ''",
+                "handoff_summary": "TEXT NOT NULL DEFAULT ''",
+                "resolution": "TEXT NOT NULL DEFAULT ''",
             }
             for name, definition in ticket_migrations.items():
                 if name not in ticket_columns:
                     connection.execute(
                         f"ALTER TABLE tickets ADD COLUMN {name} {definition}"
+                    )
+            conversation_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(conversations)"
+                ).fetchall()
+            }
+            conversation_migrations = {
+                "case_id": "TEXT NOT NULL DEFAULT ''",
+                "summary": "TEXT NOT NULL DEFAULT ''",
+                "summarized_message_count": "INTEGER NOT NULL DEFAULT 0",
+                "summary_updated_at": "TEXT NOT NULL DEFAULT ''",
+            }
+            for name, definition in conversation_migrations.items():
+                if name not in conversation_columns:
+                    connection.execute(
+                        f"ALTER TABLE conversations ADD COLUMN {name} {definition}"
                     )
             columns = {
                 row["name"]
@@ -248,6 +277,18 @@ class SQLiteRepository:
                 ON support_cases(tenant_id, assignee_user_id, status, updated_at)
                 """
             )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation
+                ON messages(tenant_id, conversation_id, created_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tickets_customer_history
+                ON tickets(tenant_id, customer_user_id, created_at)
+                """
+            )
             try:
                 connection.execute(
                     """
@@ -258,10 +299,22 @@ class SQLiteRepository:
                 self.fts_enabled = True
             except sqlite3.OperationalError:
                 self.fts_enabled = False
+            try:
+                connection.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts
+                    USING fts5(ticket_id UNINDEXED, tokens)
+                    """
+                )
+                self.ticket_fts_enabled = True
+            except sqlite3.OperationalError:
+                self.ticket_fts_enabled = False
             connection.commit()
         if self.fts_enabled:
             self._rebuild_fts_if_needed()
         self.seed_demo_data()
+        if self.ticket_fts_enabled:
+            self._rebuild_ticket_fts_if_needed()
 
     def _rebuild_fts_if_needed(self) -> None:
         with self._lock, self._connect() as connection:
@@ -278,6 +331,42 @@ class SQLiteRepository:
             connection.executemany(
                 "INSERT INTO chunks_fts(chunk_id, tokens) VALUES (?, ?)",
                 [(row["id"], " ".join(tokenize(row["content"]))) for row in rows],
+            )
+            connection.commit()
+
+    def _rebuild_ticket_fts_if_needed(self) -> None:
+        with self._lock, self._connect() as connection:
+            ticket_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM tickets"
+            ).fetchone()["count"]
+            fts_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM tickets_fts"
+            ).fetchone()["count"]
+            if ticket_count == fts_count:
+                return
+            connection.execute("DELETE FROM tickets_fts")
+            rows = connection.execute(
+                "SELECT id, subject, description, resolution FROM tickets"
+            ).fetchall()
+            connection.executemany(
+                "INSERT INTO tickets_fts(ticket_id, tokens) VALUES (?, ?)",
+                [
+                    (
+                        row["id"],
+                        " ".join(
+                            tokenize(
+                                " ".join(
+                                    [
+                                        row["subject"],
+                                        row["description"],
+                                        row["resolution"],
+                                    ]
+                                )
+                            )
+                        ),
+                    )
+                    for row in rows
+                ],
             )
             connection.commit()
 
@@ -468,6 +557,48 @@ class SQLiteRepository:
                     updated_at=excluded.updated_at
                 """,
                 cases,
+            )
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO tickets(
+                    id, tenant_id, user_id, subject, description, status,
+                    idempotency_key, created_at, customer_user_id, case_id, order_id,
+                    handoff_summary, resolution
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        "TKT-HIST-1001",
+                        "demo-company",
+                        "agent-chenyu",
+                        "企业知识库专业版登录失败",
+                        "客户在 SSO 登录后回到登录页，已确认订单和服务期正常。",
+                        "resolved",
+                        "demo-history-login-1001",
+                        "2026-05-21T09:30:00+00:00",
+                        "demo-user",
+                        "CASE-HIST-1001",
+                        "ORD-1001",
+                        "历史工单：已收集浏览器、SSO 回调和账号状态信息。",
+                        "技术支持发现 SSO 回调地址与生产域名不一致；修正配置并清理浏览器 Cookie 后恢复登录。",
+                    ),
+                    (
+                        "TKT-HIST-1002",
+                        "demo-company",
+                        "agent-chenyu",
+                        "退款资格与专业版服务期咨询",
+                        "客户咨询企业知识库专业版退款资格和剩余服务期。",
+                        "closed",
+                        "demo-history-refund-1002",
+                        "2026-03-14T08:10:00+00:00",
+                        "demo-user",
+                        "CASE-HIST-1002",
+                        "ORD-1001",
+                        "历史工单：已核对合同、生效日期和退款政策。",
+                        "已向客户说明退款政策与合同约定，并由客户确认保留当前专业版订阅。",
+                    ),
+                ],
             )
             connection.commit()
 
@@ -994,16 +1125,19 @@ class SQLiteRepository:
         customer_user_id: str = "",
         case_id: str = "",
         order_id: str = "",
+        handoff_summary: str = "",
+        resolution: str = "",
     ) -> dict[str, Any]:
         with self._lock, self._connect() as connection:
             ticket_id = f"TKT-{uuid.uuid4().hex[:8].upper()}"
-            connection.execute(
+            cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO tickets(
                     id, tenant_id, user_id, subject, description, status,
-                    idempotency_key, created_at, customer_user_id, case_id, order_id
+                    idempotency_key, created_at, customer_user_id, case_id, order_id,
+                    handoff_summary, resolution
                 )
-                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket_id,
@@ -1016,14 +1150,165 @@ class SQLiteRepository:
                     customer_user_id,
                     case_id,
                     order_id,
+                    handoff_summary,
+                    resolution,
                 ),
             )
+            if cursor.rowcount and self.ticket_fts_enabled:
+                connection.execute(
+                    "DELETE FROM tickets_fts WHERE ticket_id=?",
+                    (ticket_id,),
+                )
+                connection.execute(
+                    "INSERT INTO tickets_fts(ticket_id, tokens) VALUES (?, ?)",
+                    (
+                        ticket_id,
+                        self._ticket_tokens(subject, description, resolution),
+                    ),
+                )
             connection.commit()
             row = connection.execute(
                 "SELECT * FROM tickets WHERE tenant_id=? AND idempotency_key=?",
                 (principal.tenant_id, idempotency_key),
             ).fetchone()
         return dict(row)
+
+    def list_customer_ticket_history(
+        self,
+        principal: Principal,
+        case_id: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        case_context = self.get_support_case(principal, case_id)
+        if case_context is None:
+            return []
+        customer_user_id = str(case_context["case"]["customer_user_id"])
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, subject, description, status, resolution, case_id, order_id,
+                       created_at
+                FROM tickets
+                WHERE tenant_id=? AND customer_user_id=?
+                  AND (case_id<>? OR case_id='')
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (
+                    principal.tenant_id,
+                    customer_user_id,
+                    case_id,
+                    max(1, limit),
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def search_similar_customer_tickets(
+        self,
+        principal: Principal,
+        case_id: str,
+        query: str,
+        limit: int = 3,
+    ) -> list[dict[str, Any]]:
+        case_context = self.get_support_case(principal, case_id)
+        if case_context is None:
+            return []
+        customer_user_id = str(case_context["case"]["customer_user_id"])
+        fts_query = to_fts_query(query)
+        if not fts_query:
+            return []
+        if not self.ticket_fts_enabled:
+            return self._search_customer_ticket_history_fallback(
+                principal,
+                customer_user_id,
+                case_id,
+                query,
+                limit,
+            )
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tickets.id, tickets.subject, tickets.description, tickets.status,
+                       tickets.resolution, tickets.case_id, tickets.order_id,
+                       tickets.created_at, bm25(tickets_fts) AS fts_rank
+                FROM tickets_fts
+                JOIN tickets ON tickets.id=tickets_fts.ticket_id
+                WHERE tickets_fts MATCH ?
+                  AND tickets.tenant_id=? AND tickets.customer_user_id=?
+                  AND (tickets.case_id<>? OR tickets.case_id='')
+                ORDER BY
+                    CASE tickets.status
+                        WHEN 'resolved' THEN 0
+                        WHEN 'closed' THEN 1
+                        ELSE 2
+                    END,
+                    fts_rank ASC
+                LIMIT ?
+                """,
+                (
+                    fts_query,
+                    principal.tenant_id,
+                    customer_user_id,
+                    case_id,
+                    max(1, limit),
+                ),
+            ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            ticket = dict(row)
+            rank = float(ticket.pop("fts_rank"))
+            ticket["similarity_score"] = round(max(0.0, -rank), 6)
+            results.append(ticket)
+        return results
+
+    def _search_customer_ticket_history_fallback(
+        self,
+        principal: Principal,
+        customer_user_id: str,
+        case_id: str,
+        query: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        query_tokens = set(tokenize(query))
+        if not query_tokens:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, subject, description, status, resolution, case_id, order_id,
+                       created_at
+                FROM tickets
+                WHERE tenant_id=? AND customer_user_id=?
+                  AND (case_id<>? OR case_id='')
+                """,
+                (principal.tenant_id, customer_user_id, case_id),
+            ).fetchall()
+        scored: list[dict[str, Any]] = []
+        for row in rows:
+            ticket = dict(row)
+            ticket_tokens = set(
+                tokenize(
+                    " ".join(
+                        [ticket["subject"], ticket["description"], ticket["resolution"]]
+                    )
+                )
+            )
+            overlap = len(query_tokens.intersection(ticket_tokens))
+            if overlap:
+                ticket["similarity_score"] = round(overlap / len(query_tokens), 6)
+                scored.append(ticket)
+        scored.sort(
+            key=lambda ticket: (
+                ticket["status"] not in {"resolved", "closed"},
+                -float(ticket["similarity_score"]),
+                ticket["created_at"],
+            )
+        )
+        return scored[: max(1, limit)]
+
+    @staticmethod
+    def _ticket_tokens(subject: str, description: str, resolution: str) -> str:
+        return " ".join(tokenize(" ".join([subject, description, resolution])))
 
     def get_ops_summary(self, principal: Principal) -> dict[str, Any]:
         with self._connect() as connection:
@@ -1075,6 +1360,8 @@ class SQLiteRepository:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        case_id: str = "",
     ) -> None:
         now = utc_now()
         with self._lock, self._connect() as connection:
@@ -1087,7 +1374,7 @@ class SQLiteRepository:
             )
             if cursor.rowcount == 0:
                 owner = connection.execute(
-                    "SELECT tenant_id, user_id FROM conversations WHERE id=?",
+                    "SELECT tenant_id, user_id, case_id FROM conversations WHERE id=?",
                     (conversation_id,),
                 ).fetchone()
                 if (
@@ -1096,6 +1383,22 @@ class SQLiteRepository:
                     or owner["user_id"] != principal.user_id
                 ):
                     raise PermissionError("conversation_id belongs to another principal")
+                if case_id and owner["case_id"] and owner["case_id"] != case_id:
+                    raise PermissionError("conversation_id belongs to another support case")
+            if case_id:
+                connection.execute(
+                    """
+                    UPDATE conversations
+                    SET case_id=CASE WHEN case_id='' THEN ? ELSE case_id END
+                    WHERE id=? AND tenant_id=? AND user_id=?
+                    """,
+                    (
+                        case_id,
+                        conversation_id,
+                        principal.tenant_id,
+                        principal.user_id,
+                    ),
+                )
             connection.execute(
                 """
                 INSERT INTO messages(id, conversation_id, tenant_id, role, content,
@@ -1119,6 +1422,144 @@ class SQLiteRepository:
                 """,
                 (now, conversation_id, principal.tenant_id, principal.user_id),
             )
+            connection.commit()
+
+    def list_conversation_messages(
+        self,
+        conversation_id: str,
+        principal: Principal,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            owner = connection.execute(
+                "SELECT tenant_id, user_id FROM conversations WHERE id=?",
+                (conversation_id,),
+            ).fetchone()
+            if not owner:
+                return []
+            if (
+                owner["tenant_id"] != principal.tenant_id
+                or owner["user_id"] != principal.user_id
+            ):
+                raise PermissionError("conversation_id belongs to another principal")
+            if limit is None:
+                rows = connection.execute(
+                    """
+                    SELECT role, content, metadata_json, created_at
+                    FROM messages
+                    WHERE conversation_id=? AND tenant_id=?
+                    ORDER BY rowid ASC
+                    """,
+                    (conversation_id, principal.tenant_id),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT role, content, metadata_json, created_at
+                    FROM (
+                        SELECT rowid AS message_rowid, role, content, metadata_json,
+                               created_at
+                        FROM messages
+                        WHERE conversation_id=? AND tenant_id=?
+                        ORDER BY rowid DESC
+                        LIMIT ?
+                    )
+                    ORDER BY message_rowid ASC
+                    """,
+                    (conversation_id, principal.tenant_id, max(1, limit)),
+                ).fetchall()
+        return [
+            {
+                "role": row["role"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata_json"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_conversation_memory(
+        self,
+        conversation_id: str,
+        principal: Principal,
+        recent_limit: int,
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            conversation = connection.execute(
+                """
+                SELECT tenant_id, user_id, case_id, summary,
+                       summarized_message_count, summary_updated_at
+                FROM conversations
+                WHERE id=?
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if not conversation:
+                return {
+                    "conversation_id": conversation_id,
+                    "case_id": "",
+                    "summary": "",
+                    "recent_messages": [],
+                    "message_count": 0,
+                    "summarized_message_count": 0,
+                    "summary_updated_at": "",
+                }
+            if (
+                conversation["tenant_id"] != principal.tenant_id
+                or conversation["user_id"] != principal.user_id
+            ):
+                raise PermissionError("conversation_id belongs to another principal")
+            message_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM messages
+                WHERE conversation_id=? AND tenant_id=?
+                """,
+                (conversation_id, principal.tenant_id),
+            ).fetchone()[0]
+        return {
+            "conversation_id": conversation_id,
+            "case_id": conversation["case_id"],
+            "summary": conversation["summary"],
+            "recent_messages": self.list_conversation_messages(
+                conversation_id,
+                principal,
+                recent_limit,
+            ),
+            "message_count": message_count,
+            "summarized_message_count": conversation[
+                "summarized_message_count"
+            ],
+            "summary_updated_at": conversation["summary_updated_at"],
+        }
+
+    def update_conversation_summary(
+        self,
+        conversation_id: str,
+        principal: Principal,
+        summary: str,
+        summarized_message_count: int,
+    ) -> None:
+        now = utc_now()
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE conversations
+                SET summary=?, summarized_message_count=?,
+                    summary_updated_at=?, updated_at=?
+                WHERE id=? AND tenant_id=? AND user_id=?
+                """,
+                (
+                    summary,
+                    summarized_message_count,
+                    now,
+                    now,
+                    conversation_id,
+                    principal.tenant_id,
+                    principal.user_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise PermissionError("conversation_id belongs to another principal")
             connection.commit()
 
     def audit(

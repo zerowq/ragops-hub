@@ -118,7 +118,7 @@ async function selectCase(caseId, rerender = true) {
     const response = await request(`/api/v1/support/cases/${encodeURIComponent(caseId)}`, { headers: authHeaders(false) });
     state.context = await response.json();
     renderContext();
-    renderInitialMessages();
+    renderConversationMessages();
   } catch (error) {
     $("#conversation-title").textContent = "会话加载失败";
     setStatus(error.message, true);
@@ -126,7 +126,15 @@ async function selectCase(caseId, rerender = true) {
 }
 
 function renderContext() {
-  const { case: supportCase, customer, order, pending_action: pendingAction } = state.context;
+  const {
+    case: supportCase,
+    customer,
+    order,
+    pending_action: pendingAction,
+    memory,
+    ticket_history: ticketHistory,
+    similar_tickets: similarTickets,
+  } = state.context;
   $("#conversation-title").textContent = supportCase.subject;
   $("#conversation-meta").textContent = `${supportCase.id} · ${supportCase.channel} · ${supportCase.customer_name} / ${supportCase.company_name}`;
   const priority = $("#priority-badge");
@@ -150,6 +158,32 @@ function renderContext() {
   $("#order-amount").textContent = order ? formatMoney(order.amount_cents) : "—";
   renderEntitlements(order);
   renderPendingAction(pendingAction, supportCase);
+  $("#memory-status").textContent = memory?.summary ? "已生成摘要" : "短期上下文";
+  $("#memory-summary").textContent = memory?.summary
+    || `已保留最近 ${memory?.recent_messages?.length || 0} 条消息；达到阈值后自动生成交接摘要。`;
+  $("#memory-meta").textContent = `${memory?.message_count || 0} 条消息 · ${memory?.summarized_message_count || 0} 条已摘要`;
+  renderTicketHistory(ticketHistory || [], similarTickets || []);
+}
+
+function renderTicketHistory(ticketHistory, similarTickets) {
+  $("#history-count").textContent = `${ticketHistory.length} 条历史`;
+  const renderTicket = (ticket, isSimilar) => {
+    const resolution = ticket.resolution || ticket.description || "暂无处理结果";
+    const badge = isSimilar ? '<span class="ticket-history-match">相似问题</span>' : "";
+    return `<article class="ticket-history-card">
+      <div><strong>${escapeHtml(ticket.subject)}</strong>${badge}</div>
+      <p>${escapeHtml(resolution)}</p>
+      <small>${escapeHtml(ticket.id)} · ${escapeHtml(ticket.status)} · ${escapeHtml(formatTime(ticket.created_at))}</small>
+    </article>`;
+  };
+  $("#similar-ticket-list").innerHTML = similarTickets.length
+    ? `<p class="history-label">相似已处理问题</p>${similarTickets.map((ticket) => renderTicket(ticket, true)).join("")}`
+    : "";
+  const similarIds = new Set(similarTickets.map((ticket) => ticket.id));
+  const otherTickets = ticketHistory.filter((ticket) => !similarIds.has(ticket.id));
+  $("#ticket-history-list").innerHTML = otherTickets.length
+    ? `<p class="history-label">其他历史工单</p>${otherTickets.map((ticket) => renderTicket(ticket, false)).join("")}`
+    : (similarTickets.length ? "" : '<p class="empty-state compact-empty">当前客户暂无可访问的历史工单。</p>');
 }
 
 function renderEntitlements(order) {
@@ -191,9 +225,20 @@ function renderPendingAction(action, supportCase) {
   details.innerHTML = action ? `<strong>${escapeHtml(action.subject)}</strong><br>${escapeHtml(action.description)}<br>关联：${escapeHtml(action.case_id || "—")} / ${escapeHtml(action.order_id || "—")}` : "";
 }
 
-function renderInitialMessages() {
-  const { case: supportCase } = state.context;
+function renderConversationMessages() {
+  const { case: supportCase, memory } = state.context;
   $("#messages").innerHTML = "";
+  if (memory?.recent_messages?.length) {
+    memory.recent_messages.forEach((message) => {
+      const isUser = message.role === "user";
+      addMessage(
+        message.content,
+        isUser ? "customer" : "assistant",
+        isUser ? `陈雨 · 代客户发起 · ${formatTime(message.created_at)}` : `Copilot · ${formatTime(message.created_at)}`,
+      );
+    });
+    return;
+  }
   addMessage(supportCase.preview, "customer", `${supportCase.customer_name} · ${formatTime(supportCase.updated_at)}`);
   const starter = supportCase.ticket_id
     ? `这个问题已升级为技术工单 ${supportCase.ticket_id}。我可以继续查询知识或订单信息。`
@@ -257,6 +302,7 @@ async function streamMessage(message) {
         if (!raw) continue;
         const data = JSON.parse(raw);
         if (event === "intent_classified") messageStatus.textContent = `意图：${data.intent}`;
+        if (event === "memory_loaded" && data.recent_messages) messageStatus.textContent = `已加载 ${data.recent_messages} 条会话上下文`;
         if (event === "retrieval_start") messageStatus.textContent = "正在执行权限过滤后的混合检索…";
         if (event === "retrieval_finished") {
           messageStatus.textContent = `已召回 ${data.count} 条证据 · ${data.latency_ms} ms`;
@@ -277,7 +323,7 @@ async function streamMessage(message) {
     bubble.textContent = cleanAnswer(bubble.textContent) || "处理完成。";
     citationStrip.innerHTML = citations.map((item) => `<button class="citation-button" data-chunk-id="${escapeHtml(item.chunk_id)}">[${item.index}] ${escapeHtml(item.title)}</button>`).join("");
     citationStrip.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => openSource(button.dataset.chunkId)));
-    if (message.trim().toLowerCase() === "确认" || message.includes("确认创建")) await refreshActiveCase();
+    await refreshActiveCase();
     setStatus("处理完成，回答与操作均可审计。", false);
   } catch (error) {
     bubble.textContent = `处理失败：${error.message}`;
@@ -294,6 +340,7 @@ async function refreshActiveCase() {
   const response = await request(`/api/v1/support/cases/${encodeURIComponent(state.activeCaseId)}`, { headers: authHeaders(false) });
   state.context = await response.json();
   renderContext();
+  renderConversationMessages();
   const casesResponse = await request("/api/v1/support/cases", { headers: authHeaders(false) });
   state.cases = await casesResponse.json();
   renderCaseList();

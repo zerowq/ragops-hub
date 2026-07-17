@@ -4,6 +4,7 @@ import time
 from collections.abc import AsyncIterator
 
 from app.agent.intent import IntentRouter
+from app.agent.memory import ConversationMemoryService
 from app.agent.tools import CustomerServiceTools
 from app.domain.models import AgentEvent, Intent, Principal
 from app.llm.generator import AnswerGenerator
@@ -21,6 +22,7 @@ class EnterpriseAgentService:
         retriever: HybridRetriever,
         generator: AnswerGenerator,
         tools: CustomerServiceTools,
+        memory: ConversationMemoryService | None = None,
     ) -> None:
         self.repository = repository
         self.guard = guard
@@ -28,6 +30,7 @@ class EnterpriseAgentService:
         self.retriever = retriever
         self.generator = generator
         self.tools = tools
+        self.memory = memory or ConversationMemoryService(repository)
 
     async def stream(
         self,
@@ -38,10 +41,33 @@ class EnterpriseAgentService:
     ) -> AsyncIterator[AgentEvent]:
         started = time.perf_counter()
         yield AgentEvent("message_start", {"conversation_id": conversation_id})
-        self.repository.save_message(conversation_id, principal, "user", message)
+
+        case_context = None
+        if case_id:
+            case_context = self.repository.get_support_case(principal, case_id)
+            if case_context is None:
+                raise PermissionError("support case is not accessible")
+
+        conversation_memory = self.memory.load(conversation_id, principal)
+        yield AgentEvent(
+            "memory_loaded",
+            {
+                "recent_messages": len(conversation_memory.recent_messages),
+                "has_summary": bool(conversation_memory.summary),
+                "summarized_messages": conversation_memory.summarized_message_count,
+            },
+        )
 
         guard_result = self.guard.check(message)
         if not guard_result.allowed:
+            self.repository.save_message(
+                conversation_id,
+                principal,
+                "user",
+                message,
+                {"blocked": True, "guard_reason": guard_result.reason},
+                case_id=case_id or "",
+            )
             self.repository.audit(
                 principal,
                 "guard.block",
@@ -57,16 +83,54 @@ class EnterpriseAgentService:
             yield AgentEvent("message_end", {"status": "blocked"})
             return
 
+        self.repository.save_message(
+            conversation_id,
+            principal,
+            "user",
+            message,
+            {"case_id": case_id or ""},
+            case_id=case_id or "",
+        )
+
         # Pending-action lookup is deliberately performed by attempting a confirmation only
         # when the user explicitly confirms. Other messages leave the pending action intact.
         normalized = message.strip().lower()
         intent = self.router.classify(message, has_pending_action=normalized in {"确认", "确定", "提交", "yes", "confirm"})
+        order_id = self.memory.resolve_order_id(
+            message,
+            conversation_memory,
+            case_context,
+        )
+        if (
+            intent is Intent.KNOWLEDGE
+            and self.memory.is_order_follow_up(message, order_id)
+        ):
+            intent = Intent.QUERY_ORDER
         yield AgentEvent("intent_classified", {"intent": intent.value})
+
+        similar_tickets: list[dict[str, object]] = []
+        if case_context:
+            case = case_context["case"]
+            history_query = " ".join(
+                [
+                    str(case.get("subject", "")),
+                    str(case.get("preview", "")),
+                    message,
+                ]
+            )
+            similar_tickets = self.repository.search_similar_customer_tickets(
+                principal,
+                str(case["id"]),
+                history_query,
+            )
+            yield AgentEvent(
+                "customer_history_loaded",
+                {"similar_tickets": len(similar_tickets)},
+            )
 
         answer = ""
         citations: list[dict[str, object]] = []
         if intent is Intent.QUERY_ORDER:
-            order_id = self.router.extract_order_id(message)
             if not order_id:
                 answer = "请提供订单号，例如 ORD-1001。"
             else:
@@ -91,13 +155,13 @@ class EnterpriseAgentService:
                 yield event
 
         elif intent is Intent.CREATE_TICKET:
-            case_context = (
-                self.repository.get_support_case(principal, case_id)
-                if case_id
-                else None
-            )
             case = case_context["case"] if case_context else {}
             subject = str(case.get("subject") or "客服问题")
+            handoff_summary = self.memory.build_handoff_summary(
+                conversation_id,
+                principal,
+                case_context,
+            )
             result = await self.tools.prepare_ticket(
                 principal,
                 conversation_id,
@@ -106,6 +170,7 @@ class EnterpriseAgentService:
                 case_id=str(case.get("id", "")),
                 order_id=str(case.get("order_id", "")),
                 customer_user_id=str(case.get("customer_user_id", "")),
+                handoff_summary=handoff_summary,
             )
             yield AgentEvent("human_confirmation_required", result)
             answer = f"将创建工单：{subject}，内容为“{message}”。回复“确认”后提交。"
@@ -125,9 +190,20 @@ class EnterpriseAgentService:
                 yield event
 
         elif intent is Intent.KNOWLEDGE:
-            yield AgentEvent("retrieval_start", {"query": message})
+            contextual_query = self.memory.contextualize_query(
+                message,
+                conversation_memory,
+                case_context,
+            )
+            yield AgentEvent(
+                "retrieval_start",
+                {
+                    "query": message,
+                    "contextualized": contextual_query != message,
+                },
+            )
             retrieval_started = time.perf_counter()
-            hits = await self.retriever.search(message, principal)
+            hits = await self.retriever.search(contextual_query, principal)
             safe_hits = [hit for hit in hits if self.guard.check(hit.chunk.content).allowed]
             if len(safe_hits) != len(hits):
                 self.repository.audit(
@@ -156,7 +232,16 @@ class EnterpriseAgentService:
                 {"count": len(hits), "latency_ms": retrieval_ms, "citations": citations},
             )
             fragments: list[str] = []
-            async for token in self.generator.stream(message, hits):
+            generation_context = self.memory.generation_context(
+                conversation_memory,
+                case_context,
+                similar_tickets,
+            )
+            async for token in self.generator.stream(
+                message,
+                hits,
+                generation_context,
+            ):
                 fragments.append(token)
                 yield AgentEvent("text_delta", {"content": token})
             answer = "".join(fragments)
@@ -174,6 +259,16 @@ class EnterpriseAgentService:
             "assistant",
             answer,
             {"intent": intent.value, "citations": citations},
+            case_id=case_id or "",
+        )
+        updated_memory = self.memory.refresh_summary(conversation_id, principal)
+        yield AgentEvent(
+            "memory_updated",
+            {
+                "message_count": updated_memory.message_count,
+                "has_summary": bool(updated_memory.summary),
+                "summarized_messages": updated_memory.summarized_message_count,
+            },
         )
         yield AgentEvent(
             "message_end",

@@ -28,6 +28,7 @@ class CustomerServiceTools:
         case_id: str = "",
         order_id: str = "",
         customer_user_id: str = "",
+        handoff_summary: str = "",
     ) -> dict[str, object]:
         action = {
             "action_id": str(uuid.uuid4()),
@@ -37,6 +38,7 @@ class CustomerServiceTools:
             "case_id": case_id,
             "order_id": order_id,
             "customer_user_id": customer_user_id,
+            "handoff_summary": handoff_summary[:4000],
         }
         self.repository.set_pending_action(conversation_id, principal, action)
         self.repository.audit(
@@ -61,6 +63,7 @@ class CustomerServiceTools:
             customer_user_id=str(action.get("customer_user_id", "")),
             case_id=str(action.get("case_id", "")),
             order_id=str(action.get("order_id", "")),
+            handoff_summary=str(action.get("handoff_summary", "")),
         )
         case_id = str(action.get("case_id", ""))
         if case_id:

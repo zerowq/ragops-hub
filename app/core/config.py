@@ -62,6 +62,18 @@ class Settings:
     )
     llm_enabled: bool = field(default_factory=lambda: _bool("LLM_ENABLED", False))
 
+    memory_recent_messages: int = field(
+        default_factory=lambda: int(os.getenv("MEMORY_RECENT_MESSAGES", "8"))
+    )
+    memory_summary_trigger_messages: int = field(
+        default_factory=lambda: int(
+            os.getenv("MEMORY_SUMMARY_TRIGGER_MESSAGES", "12")
+        )
+    )
+    memory_summary_max_chars: int = field(
+        default_factory=lambda: int(os.getenv("MEMORY_SUMMARY_MAX_CHARS", "1600"))
+    )
+
     top_k_dense: int = field(
         default_factory=lambda: int(os.getenv("TOP_K_DENSE", "8"))
     )

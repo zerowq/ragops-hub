@@ -75,7 +75,30 @@ async def get_support_case(
     if context is None:
         raise HTTPException(404, "Support case not found or not accessible")
     pending_action = container.repository.get_pending_action(case_id, principal)
-    return {**context, "pending_action": pending_action}
+    memory = container.memory.load(case_id, principal)
+    case_query = f"{context['case']['subject']} {context['case']['preview']}"
+    ticket_history = container.repository.list_customer_ticket_history(
+        principal,
+        case_id,
+    )
+    similar_tickets = container.repository.search_similar_customer_tickets(
+        principal,
+        case_id,
+        case_query,
+    )
+    return {
+        **context,
+        "pending_action": pending_action,
+        "memory": {
+            "summary": memory.summary,
+            "recent_messages": memory.recent_messages,
+            "message_count": memory.message_count,
+            "summarized_message_count": memory.summarized_message_count,
+            "summary_updated_at": memory.summary_updated_at,
+        },
+        "ticket_history": ticket_history,
+        "similar_tickets": similar_tickets,
+    }
 
 
 @router.post("/support/cases/{case_id}/pending-action/cancel")

@@ -152,6 +152,14 @@ h2 { margin-bottom: 0; font-size: 16px; letter-spacing: -.15px; }
 .action-panel h2 { margin-bottom: 8px; }
 .action-panel > p:not(.eyebrow) { color: var(--muted); font-size: 11px; line-height: 1.65; }
 .pending-details { margin: 10px 0; padding: 10px; border-radius: 8px; background: white; border: 1px solid var(--line); color: #425167; font-size: 10px; line-height: 1.55; }
+.ticket-history-list { display: grid; gap: 8px; }
+.history-label { margin: 2px 0 0; color: var(--subtle); font-size: 10px; font-weight: 700; }
+.ticket-history-card { padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #425167; }
+.ticket-history-card strong { display: inline; font-size: 11px; line-height: 1.35; }
+.ticket-history-card p { margin: 5px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.ticket-history-card small { color: var(--subtle); font-size: 9px; }
+.ticket-history-match { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 999px; background: #e6f6ef; color: #19724a; font-size: 9px; font-weight: 700; }
+.compact-empty { margin: 0; font-size: 11px; }
 .action-buttons { gap: 7px; flex-wrap: wrap; }
 
 .page-view { min-height: calc(100vh - 72px); padding: 34px clamp(24px, 5vw, 72px) 64px; }
