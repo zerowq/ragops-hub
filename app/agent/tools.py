@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import uuid
 
 from app.domain.models import Principal
 from app.storage.repository import SQLiteRepository
@@ -21,6 +22,7 @@ class CustomerServiceTools:
         self, principal: Principal, conversation_id: str, subject: str, description: str
     ) -> dict[str, object]:
         action = {
+            "action_id": str(uuid.uuid4()),
             "type": "create_ticket",
             "subject": subject[:120],
             "description": description[:2000],
@@ -32,13 +34,13 @@ class CustomerServiceTools:
         return {"ok": True, "requires_confirmation": True, "action": action}
 
     async def confirm_pending(self, principal: Principal, conversation_id: str) -> dict[str, object]:
-        action = self.repository.pop_pending_action(conversation_id, principal)
+        action = self.repository.get_pending_action(conversation_id, principal)
         if not action:
             return {"ok": False, "error": "当前没有待确认操作"}
         if action.get("type") != "create_ticket":
             return {"ok": False, "error": "不支持的待确认操作"}
         idempotency_key = hashlib.sha256(
-            f"{principal.tenant_id}:{principal.user_id}:{conversation_id}:{action['description']}".encode()
+            f"{principal.tenant_id}:{principal.user_id}:{action['action_id']}".encode()
         ).hexdigest()
         ticket = self.repository.create_ticket(
             principal,
@@ -46,6 +48,10 @@ class CustomerServiceTools:
             description=action["description"],
             idempotency_key=idempotency_key,
         )
+        self.repository.clear_pending_action(
+            conversation_id,
+            principal,
+            str(action["action_id"]),
+        )
         self.repository.audit(principal, "ticket.create", "ticket", ticket["id"])
         return {"ok": True, "ticket": ticket}
-

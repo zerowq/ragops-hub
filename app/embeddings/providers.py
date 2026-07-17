@@ -63,8 +63,16 @@ class OpenAICompatibleEmbeddingProvider:
             payload = response.json()
         ordered = sorted(payload["data"], key=lambda item: item["index"])
         vectors = [item["embedding"] for item in ordered]
-        if vectors and len(vectors[0]) != self.dimension:
+        if len(vectors) != len(texts):
             raise ValueError(
-                f"Embedding dimension mismatch: configured={self.dimension}, actual={len(vectors[0])}"
+                f"Embedding count mismatch: requested={len(texts)}, actual={len(vectors)}"
+            )
+        invalid_dimensions = {
+            len(vector) for vector in vectors if len(vector) != self.dimension
+        }
+        if invalid_dimensions:
+            raise ValueError(
+                "Embedding dimension mismatch: "
+                f"configured={self.dimension}, actual={sorted(invalid_dimensions)}"
             )
         return vectors

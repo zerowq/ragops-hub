@@ -32,10 +32,31 @@ async def test_hybrid_retrieval_respects_tenant(tmp_path: Path) -> None:
 
     allowed = chunk("a", "tenant-a", "企业退款期限为七天")
     forbidden = chunk("b", "tenant-b", "企业退款期限为三十天")
+    allowed.document_id = repository.create_document(
+        tenant_id="tenant-a",
+        department_id="support",
+        owner_user_id="u1",
+        title="allowed",
+        source="a.md",
+        visibility="public",
+        version=1,
+        content_hash="hash-a",
+    )
+    forbidden.document_id = repository.create_document(
+        tenant_id="tenant-b",
+        department_id="support",
+        owner_user_id="u2",
+        title="forbidden",
+        source="b.md",
+        visibility="public",
+        version=1,
+        content_hash="hash-b",
+    )
+    repository.save_chunks([allowed])
+    repository.save_chunks([forbidden])
     allowed.embedding, forbidden.embedding = await embedder.embed([allowed.content, forbidden.content])
     await store.upsert([allowed, forbidden])
 
-    # BM25 repository rows are intentionally omitted; dense retrieval still verifies tenant filtering.
     retriever = HybridRetriever(repository, store, embedder, top_k_final=5)
     hits = await retriever.search("退款期限", principal)
     assert [hit.chunk.id for hit in hits] == ["a"]
@@ -63,6 +84,7 @@ async def test_light_rerank_keeps_strong_sparse_match_when_dense_misses(tmp_path
         document_id = repository.create_document(
             tenant_id="tenant-a",
             department_id="support",
+            owner_user_id="u1",
             title=f"doc-{index}",
             source=f"doc-{index}.md",
             visibility="public",
@@ -95,3 +117,17 @@ async def test_light_rerank_keeps_strong_sparse_match_when_dense_misses(tmp_path
     hits = await retriever.search("上传文件支持哪些格式？", principal)
 
     assert hits[0].chunk.id == "chunk-0"
+
+
+@pytest.mark.asyncio
+async def test_no_evidence_returns_no_hits(tmp_path: Path) -> None:
+    repository = SQLiteRepository(tmp_path / "no-answer.db")
+    embedder = HashEmbeddingProvider(64)
+    principal = Principal("u1", "tenant-a", "support")
+
+    class EmptyDenseStore:
+        async def search(self, vector, principal, limit):
+            return []
+
+    retriever = HybridRetriever(repository, EmptyDenseStore(), embedder)
+    assert await retriever.search("火星基地的餐厅菜单", principal) == []

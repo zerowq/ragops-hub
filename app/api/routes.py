@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
-import shutil
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.api.schemas import ChatRequest, SearchRequest
 from app.domain.models import AgentEvent, Principal
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 def encode_sse(event: AgentEvent) -> str:
@@ -23,12 +25,25 @@ def encode_sse(event: AgentEvent) -> str:
 
 @router.get("/health")
 async def health(container: Container = Depends(get_container)) -> dict[str, object]:
+    database_ready = container.repository.health()
+    vector_ready = await container.vector_store.health()
+    if not database_ready or not vector_ready:
+        raise HTTPException(
+            503,
+            {
+                "status": "not_ready",
+                "database": database_ready,
+                "vector_store": vector_ready,
+            },
+        )
     return {
         "status": "ok",
         "app": container.settings.app_name,
         "vector_backend": container.settings.vector_backend,
         "embedding_provider": container.settings.embedding_provider,
         "llm_enabled": container.settings.llm_enabled,
+        "database": "ready",
+        "vector_store": "ready",
     }
 
 
@@ -55,7 +70,13 @@ async def upload_document(
         raise HTTPException(415, "Supported file types: txt, md, pdf, docx")
     target = container.settings.upload_dir / f"{uuid.uuid4().hex}{suffix}"
     with target.open("wb") as output:
-        shutil.copyfileobj(file.file, output)
+        uploaded = 0
+        while chunk := await file.read(1024 * 1024):
+            uploaded += len(chunk)
+            if uploaded > container.settings.max_upload_bytes:
+                target.unlink(missing_ok=True)
+                raise HTTPException(413, "Uploaded file is too large")
+            await asyncio.to_thread(output.write, chunk)
     try:
         return await container.ingestion.ingest_path(
             target,
@@ -74,10 +95,18 @@ async def delete_document(
     principal: Principal = Depends(get_principal),
     container: Container = Depends(get_container),
 ) -> dict[str, object]:
-    chunk_ids = container.repository.delete_document(principal, document_id)
-    if not chunk_ids:
-        raise HTTPException(404, "Document not found")
-    await container.vector_store.delete(chunk_ids)
+    chunk_ids = container.repository.mark_document_deleting(principal, document_id)
+    if chunk_ids is None:
+        raise HTTPException(404, "Document not found or not deletable")
+    try:
+        await container.vector_store.delete(chunk_ids)
+    except Exception as error:
+        logger.exception("Vector deletion failed for document %s", document_id)
+        raise HTTPException(
+            503,
+            "Document deletion is pending and will be retried",
+        ) from error
+    container.repository.finalize_document_delete(principal, document_id)
     container.repository.audit(principal, "document.delete", "document", document_id)
     return {"status": "deleted", "chunks": len(chunk_ids)}
 
@@ -120,12 +149,27 @@ async def chat_stream(
             ):
                 yield encode_sse(event)
         except Exception as error:
+            logger.exception("Agent stream failed")
+            try:
+                container.repository.audit(
+                    principal,
+                    "agent.error",
+                    "conversation",
+                    request.conversation_id,
+                    {"error_type": type(error).__name__},
+                )
+            except Exception:
+                logger.exception("Failed to persist agent error audit")
             yield encode_sse(
                 AgentEvent(
                     "error",
-                    {"code": "AGENT_EXECUTION_ERROR", "message": str(error)},
+                    {
+                        "code": "AGENT_EXECUTION_ERROR",
+                        "message": "请求处理失败，请稍后重试。",
+                    },
                 )
             )
+            yield encode_sse(AgentEvent("message_end", {"status": "error"}))
 
     return StreamingResponse(
         stream(),
@@ -136,4 +180,3 @@ async def chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
-

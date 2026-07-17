@@ -1,5 +1,8 @@
 .env
 .venv/
+.idea/
+*.egg-info/
+build/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -8,4 +11,3 @@ data/uploads/
 data/milvus/
 *.pyc
 .DS_Store
-

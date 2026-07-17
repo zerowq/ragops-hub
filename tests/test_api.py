@@ -1,4 +1,9 @@
+import os
+import tempfile
+
 from fastapi.testclient import TestClient
+
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="ragops-api-tests-")
 
 from app.main import app
 

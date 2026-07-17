@@ -52,6 +52,7 @@ class Chunk:
 class SearchHit:
     chunk: Chunk
     score: float
+    dense_score: float | None = None
     dense_rank: int | None = None
     sparse_rank: int | None = None
     rerank_score: float | None = None
@@ -62,4 +63,3 @@ class AgentEvent:
     event: str
     data: dict[str, Any]
     created_at: str = field(default_factory=utc_now)
-
