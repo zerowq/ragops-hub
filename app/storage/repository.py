@@ -318,6 +318,19 @@ class SQLiteRepository:
             ).fetchall()
         return [self._row_to_chunk(row) for row in rows]
 
+    def list_ready_chunks(self) -> list[Chunk]:
+        """Return chunks used to rebuild a non-persistent vector store."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT chunks.* FROM chunks
+                JOIN documents ON documents.id=chunks.document_id
+                WHERE documents.status='ready'
+                ORDER BY chunks.tenant_id, chunks.document_id, chunks.position
+                """
+            ).fetchall()
+        return [self._row_to_chunk(row) for row in rows]
+
     def save_chunks(self, chunks: list[Chunk]) -> None:
         rows = [
             (

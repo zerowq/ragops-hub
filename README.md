@@ -71,8 +71,9 @@ User: demo-user
 Department: customer-service
 ```
 
-注意：内存向量模式重启后 Dense 向量会丢失，但业务 Chunk 和 FTS5 索引仍在 SQLite。重新运行
-`python -m scripts.bootstrap_demo` 会自动根据已有 Chunk 恢复内存向量。
+注意：内存向量模式本身不持久化 Dense 向量，但业务 Chunk 和 FTS5 索引保存在 SQLite。应用每次
+启动时会读取所有 `ready` Chunk、重新生成 Embedding 并装载内存向量库，因此运行一次
+`python -m scripts.bootstrap_demo` 完成样例入库后，后续只需重启应用。
 
 ## 2. Milvus Standalone 模式
 

@@ -81,6 +81,21 @@ class Container:
             self.tools,
         )
 
+    async def startup(self) -> int:
+        """Restore vectors when the selected vector backend is non-persistent."""
+        if self.vector_store.persistent:
+            return 0
+        chunks = self.repository.list_ready_chunks()
+        if not chunks:
+            return 0
+        for offset in range(0, len(chunks), 64):
+            batch = chunks[offset : offset + 64]
+            vectors = await self.embedder.embed([chunk.content for chunk in batch])
+            for chunk, vector in zip(batch, vectors, strict=True):
+                chunk.embedding = vector
+            await self.vector_store.upsert(batch)
+        return len(chunks)
+
 
 @lru_cache(maxsize=1)
 def get_container() -> Container:

@@ -1,18 +1,31 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.dependencies import get_container
 from app.api.routes import router
 from app.core.config import get_settings
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    await get_container().startup()
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="Multi-tenant enterprise RAG and customer-service agent reference implementation",
+    lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -33,4 +46,3 @@ async def home() -> FileResponse:
 @app.get("/docs-ui", include_in_schema=False)
 async def docs_redirect() -> RedirectResponse:
     return RedirectResponse("/docs")
-

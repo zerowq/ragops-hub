@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.api.dependencies import Container
 from app.domain.models import Chunk, Principal
 from app.embeddings.providers import HashEmbeddingProvider
 from app.rag.chunking import StructureAwareChunker
@@ -159,3 +160,34 @@ async def test_duplicate_bootstrap_rehydrates_memory_vectors(tmp_path: Path) -> 
 
     assert result["vector_rehydrated"] is True
     assert hits
+
+
+@pytest.mark.asyncio
+async def test_application_startup_rehydrates_memory_vectors(tmp_path: Path) -> None:
+    path = tmp_path / "document.md"
+    path.write_text("# Refund\n\nRefunds are available within seven days.")
+    repository = SQLiteRepository(tmp_path / "startup-rehydrate.db")
+    embedder = HashEmbeddingProvider(64)
+    principal = Principal("owner", "tenant-a", "support")
+    ingestion = IngestionService(
+        repository,
+        InMemoryVectorStore(),
+        embedder,
+        StructureAwareChunker(),
+        DocumentParser(),
+    )
+    await ingestion.ingest_path(path, principal)
+
+    restarted_store = InMemoryVectorStore()
+    container = object.__new__(Container)
+    container.repository = repository
+    container.vector_store = restarted_store
+    container.embedder = embedder
+
+    restored = await container.startup()
+    query_vector = (await embedder.embed(["refund seven days"]))[0]
+    hits = await restarted_store.search(query_vector, principal, 5)
+
+    assert restored > 0
+    assert hits
+    assert hits[0].dense_rank == 1
