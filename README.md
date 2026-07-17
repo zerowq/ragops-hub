@@ -7,9 +7,9 @@
 
 - 多格式文档：PDF、DOCX、Markdown、TXT。
 - 文档生命周期：SHA-256 去重、版本、状态、增量删除。
-- Hybrid RAG：Dense + BM25 + RRF + 轻量 Rerank。
+- Hybrid RAG：Milvus Dense + SQLite FTS5/BM25 + RRF + 轻量 Rerank。
 - 向量后端：零依赖内存模式 / Milvus Standalone。
-- 多租户：Tenant、Department、Public/Department/Private 可见范围。
+- 多租户：Tenant、Department、Owner、Public/Department/Private 可见范围。
 - Agent：知识问答、订单查询、工单创建、Human-in-the-loop。
 - 安全：Prompt Injection 规则防线、工具权限校验、工单幂等和审计。
 - SSE：结构化检索、工具、Token、引用和结束事件。
@@ -33,15 +33,17 @@ Prompt Guard -> Intent Router
 Hybrid Retriever
   |          |
   v          v
-Dense      BM25
-Milvus     SQLite Chunk Metadata
+Dense      FTS5/BM25
+Milvus     SQLite Persistent Inverted Index
   \          /
    RRF Fusion -> Lightweight Rerank -> Grounded Answer -> SSE + Citations
 ```
 
 更完整的设计解释见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，面试知识点见
 [docs/INTERVIEW_KNOWLEDGE.md](docs/INTERVIEW_KNOWLEDGE.md)，逐步实现逻辑见
-[docs/IMPLEMENTATION_STEPS.md](docs/IMPLEMENTATION_STEPS.md)。
+[docs/IMPLEMENTATION_STEPS.md](docs/IMPLEMENTATION_STEPS.md)。设计审查与修复记录见
+[docs/DESIGN_REVIEW.md](docs/DESIGN_REVIEW.md)，完整口语化问答见
+[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
 
 ## 1. 最快启动：离线演示模式
 
@@ -69,8 +71,8 @@ User: demo-user
 Department: customer-service
 ```
 
-注意：内存向量模式重启后 Dense 向量会丢失，但业务 Chunk 仍在 SQLite，BM25 仍可检索。重启后运行
-`python -m scripts.bootstrap_demo` 会因文档哈希去重而跳过。如果需要持久向量，请使用 Milvus 模式或清理本地演示数据库后重新入库。
+注意：内存向量模式重启后 Dense 向量会丢失，但业务 Chunk 和 FTS5 索引仍在 SQLite。重新运行
+`python -m scripts.bootstrap_demo` 会自动根据已有 Chunk 恢复内存向量。
 
 ## 2. Milvus Standalone 模式
 
@@ -100,10 +102,26 @@ LLM_ENABLED=false
 Milvus WebUI：http://127.0.0.1:9091/webui/  
 MinIO Console：http://127.0.0.1:19001（宿主机使用 19001，避免常见的 9001 端口冲突）
 
-完整容器模式：
+完整容器模式会自动启动 etcd、MinIO、Milvus，执行样例知识入库，然后启动 API：
 
 ```bash
 docker compose --profile full up -d --build
+```
+
+查看状态：
+
+```bash
+docker compose --profile full ps
+docker compose --profile full logs bootstrap app
+```
+
+应用健康后可访问演示页面 `http://127.0.0.1:8000`、Swagger `http://127.0.0.1:8000/docs`、
+Milvus WebUI `http://127.0.0.1:9091/webui/` 和 MinIO Console `http://127.0.0.1:19001`。
+
+停止完整环境：
+
+```bash
+docker compose --profile full down
 ```
 
 ## 3. 接入真实模型
@@ -186,7 +204,8 @@ curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
 .venv/bin/ruff check app tests scripts
 ```
 
-测试覆盖：结构化 Chunk、Prompt Injection、租户隔离、混合检索回归、订单越权边界、工单二次确认。
+测试覆盖：结构化 Chunk、Prompt Injection、租户隔离、私有文档 ACL、会话归属、双写补偿、
+混合检索回归、订单越权边界和工单二次确认。
 
 ## 7. 项目目录
 
@@ -212,10 +231,10 @@ tests/         自动化测试
 
 该仓库是企业工程样板，不冒充真实大规模生产系统。进一步生产化需要：
 
-- JWT/SSO 生成可信 Principal，禁止信任客户端身份头。
+- 生产使用 OIDC/JWKS 替换演示 Header 和示例 HS256 JWT。
 - PostgreSQL 替换 SQLite，并增加迁移工具和连接池。
 - 对象存储、病毒扫描、PII 检测和异步解析队列。
-- 向量库与关系库双写的一致性补偿/Outbox。
+- 在现有补偿和孤立向量过滤基础上增加完整 Outbox 与一致性巡检。
 - 专业 Reranker、模型路由、限流、熔断、Token 配额。
 - OpenTelemetry、Prometheus、结构化日志和告警。
 - SSE 心跳、断线续传、取消和代理超时。

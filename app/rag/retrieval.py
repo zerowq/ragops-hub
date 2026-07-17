@@ -1,21 +1,13 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import Counter, defaultdict
 
 from app.domain.models import Chunk, Principal, SearchHit
 from app.embeddings.providers import EmbeddingProvider
+from app.rag.tokenization import tokenize
 from app.storage.repository import SQLiteRepository
 from app.storage.vector_store import VectorStore
-
-
-def tokenize(text: str) -> list[str]:
-    normalized = text.lower()
-    english = re.findall(r"[a-z0-9_\-]+", normalized)
-    chinese = re.findall(r"[\u4e00-\u9fff]", normalized)
-    chinese_bigrams = ["".join(chinese[index : index + 2]) for index in range(max(0, len(chinese) - 1))]
-    return english + chinese + chinese_bigrams
 
 
 class BM25Retriever:
@@ -61,6 +53,8 @@ class HybridRetriever:
         top_k_sparse: int = 8,
         top_k_final: int = 5,
         rrf_k: int = 60,
+        min_dense_score: float = 0.15,
+        min_lexical_overlap: float = 0.15,
     ) -> None:
         self.repository = repository
         self.vector_store = vector_store
@@ -70,12 +64,20 @@ class HybridRetriever:
         self.top_k_sparse = top_k_sparse
         self.top_k_final = top_k_final
         self.rrf_k = rrf_k
+        self.min_dense_score = min_dense_score
+        self.min_lexical_overlap = min_lexical_overlap
 
     async def search(self, query: str, principal: Principal) -> list[SearchHit]:
         query_vector = (await self.embedder.embed([query]))[0]
         dense_hits = await self.vector_store.search(query_vector, principal, self.top_k_dense)
-        accessible_chunks = self.repository.list_accessible_chunks(principal)
-        sparse_hits = self.bm25.search(query, accessible_chunks, self.top_k_sparse)
+        accessible_dense_ids = self.repository.filter_accessible_chunk_ids(
+            principal, [hit.chunk.id for hit in dense_hits]
+        )
+        dense_hits = [hit for hit in dense_hits if hit.chunk.id in accessible_dense_ids]
+        sparse_hits = self.repository.search_sparse(query, principal, self.top_k_sparse)
+        if sparse_hits is None:
+            accessible_chunks = self.repository.list_accessible_chunks(principal)
+            sparse_hits = self.bm25.search(query, accessible_chunks, self.top_k_sparse)
 
         fused_scores: dict[str, float] = defaultdict(float)
         sparse_scores = {hit.chunk.id: hit.score for hit in sparse_hits}
@@ -100,6 +102,12 @@ class HybridRetriever:
             # otherwise bury an exact BM25 match that dense retrieval misses. Keep the
             # rank fusion and add a bounded, score-aware sparse signal for the light rerank.
             normalized_sparse_score = sparse_scores.get(chunk_id, 0.0) / max_sparse_score
+            dense_score = hit.dense_score if hit.dense_score is not None else -1.0
+            if (
+                dense_score < self.min_dense_score
+                and lexical_overlap < self.min_lexical_overlap
+            ):
+                continue
             hit.rerank_score = (
                 fused_scores[chunk_id]
                 + lexical_overlap * 0.02

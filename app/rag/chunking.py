@@ -36,6 +36,14 @@ class StructureAwareChunker:
         result: list[str] = []
         current = ""
         for paragraph in paragraphs:
+            if len(paragraph) > self.chunk_size:
+                prefix = current[-self.overlap :] if current else ""
+                if current:
+                    result.append(current)
+                oversized = f"{prefix}\n{paragraph}".strip()
+                result.extend(self._split_window(oversized))
+                current = ""
+                continue
             candidate = f"{current}\n{paragraph}".strip()
             if len(candidate) <= self.chunk_size:
                 current = candidate
@@ -45,14 +53,21 @@ class StructureAwareChunker:
                 prefix = current[-self.overlap :]
                 current = f"{prefix}\n{paragraph}".strip()
             else:
-                start = 0
-                while start < len(paragraph):
-                    end = start + self.chunk_size
-                    result.append(paragraph[start:end])
-                    start = end - self.overlap
+                result.extend(self._split_window(paragraph))
                 current = ""
         if current:
             result.append(current)
+        return result
+
+    def _split_window(self, text: str) -> list[str]:
+        result: list[str] = []
+        start = 0
+        while start < len(text):
+            end = min(len(text), start + self.chunk_size)
+            result.append(text[start:end])
+            if end == len(text):
+                break
+            start = end - self.overlap
         return result
 
     @staticmethod
@@ -61,4 +76,3 @@ class StructureAwareChunker:
         text = re.sub(r"[ \t]+", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
         return text.strip()
-

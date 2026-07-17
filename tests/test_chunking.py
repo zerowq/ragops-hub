@@ -12,3 +12,8 @@ def test_chunker_splits_with_overlap() -> None:
     assert len(chunks) > 1
     assert all(len(chunk) <= 100 for chunk in chunks)
 
+
+def test_chunker_never_emits_oversized_paragraph_after_short_text() -> None:
+    text = "短段落。\n\n" + "长文本" * 100
+    chunks = StructureAwareChunker(chunk_size=100, overlap=20).split(text)
+    assert all(len(chunk) <= 100 for chunk in chunks)

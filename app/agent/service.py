@@ -101,6 +101,16 @@ class EnterpriseAgentService:
             yield AgentEvent("retrieval_start", {"query": message})
             retrieval_started = time.perf_counter()
             hits = await self.retriever.search(message, principal)
+            safe_hits = [hit for hit in hits if self.guard.check(hit.chunk.content).allowed]
+            if len(safe_hits) != len(hits):
+                self.repository.audit(
+                    principal,
+                    "retrieval.chunk_block",
+                    "conversation",
+                    conversation_id,
+                    {"blocked_chunks": len(hits) - len(safe_hits)},
+                )
+            hits = safe_hits
             retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000, 2)
             citations = [
                 {
@@ -151,4 +161,3 @@ class EnterpriseAgentService:
     async def _emit_text(text: str) -> AsyncIterator[AgentEvent]:
         for character in text:
             yield AgentEvent("text_delta", {"content": character})
-

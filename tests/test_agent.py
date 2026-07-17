@@ -28,6 +28,13 @@ def build_agent(path: Path) -> EnterpriseAgentService:
     )
 
 
+def test_intent_router_handles_negation_and_order_policy() -> None:
+    router = IntentRouter()
+    assert router.classify("我不想创建工单，只想了解处理流程").value == "knowledge"
+    assert router.classify("订单退款政策是什么").value == "knowledge"
+    assert router.classify("查询订单 ORD-1001").value == "query_order"
+
+
 @pytest.mark.asyncio
 async def test_order_tool_enforces_owner(tmp_path: Path) -> None:
     agent = build_agent(tmp_path / "agent.db")
@@ -46,4 +53,3 @@ async def test_ticket_requires_confirmation(tmp_path: Path) -> None:
     second = [event async for event in agent.stream("确认", "c2", principal)]
     text = "".join(event.data.get("content", "") for event in second if event.event == "text_delta")
     assert "工单已创建" in text
-

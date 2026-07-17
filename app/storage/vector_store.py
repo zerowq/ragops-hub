@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import threading
 from typing import Protocol
@@ -8,6 +9,10 @@ from app.domain.models import Chunk, Principal, SearchHit
 
 
 class VectorStore(Protocol):
+    persistent: bool
+
+    async def health(self) -> bool: ...
+
     async def upsert(self, chunks: list[Chunk]) -> None: ...
 
     async def delete(self, chunk_ids: list[str]) -> None: ...
@@ -27,9 +32,14 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
 
 
 class InMemoryVectorStore:
+    persistent = False
+
     def __init__(self) -> None:
         self._chunks: dict[str, Chunk] = {}
         self._lock = threading.RLock()
+
+    async def health(self) -> bool:
+        return True
 
     async def upsert(self, chunks: list[Chunk]) -> None:
         with self._lock:
@@ -59,7 +69,12 @@ class InMemoryVectorStore:
                 )
             )
         ]
-        hits = [SearchHit(chunk=chunk, score=cosine_similarity(vector, chunk.embedding)) for chunk in accessible]
+        hits = []
+        for chunk in accessible:
+            similarity = cosine_similarity(vector, chunk.embedding)
+            hits.append(
+                SearchHit(chunk=chunk, score=similarity, dense_score=similarity)
+            )
         hits.sort(key=lambda item: item.score, reverse=True)
         for index, hit in enumerate(hits[:limit], start=1):
             hit.dense_rank = index
@@ -67,12 +82,15 @@ class InMemoryVectorStore:
 
 
 class MilvusVectorStore:
+    persistent = True
+
     def __init__(self, uri: str, token: str, collection: str, dimension: int) -> None:
         from pymilvus import DataType, MilvusClient
 
         self.client = MilvusClient(uri=uri, token=token or None)
         self.collection = collection
         self.dimension = dimension
+        self.has_document_version = False
         if not self.client.has_collection(collection_name=collection):
             schema = self.client.create_schema(auto_id=False, enable_dynamic_field=False)
             schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=64)
@@ -82,6 +100,7 @@ class MilvusVectorStore:
             schema.add_field("visibility", DataType.VARCHAR, max_length=32)
             schema.add_field("owner_user_id", DataType.VARCHAR, max_length=64)
             schema.add_field("document_id", DataType.VARCHAR, max_length=64)
+            schema.add_field("document_version", DataType.INT64)
             schema.add_field("content", DataType.VARCHAR, max_length=8192)
             schema.add_field("source", DataType.VARCHAR, max_length=1024)
             schema.add_field("title", DataType.VARCHAR, max_length=512)
@@ -98,12 +117,41 @@ class MilvusVectorStore:
                 schema=schema,
                 index_params=index_params,
             )
+            self.has_document_version = True
+        else:
+            description = self.client.describe_collection(collection_name=collection)
+            fields = description.get("fields", [])
+            field_names = {field.get("name") for field in fields}
+            self.has_document_version = "document_version" in field_names
+            vector_field = next(
+                (field for field in fields if field.get("name") == "vector"),
+                None,
+            )
+            configured_dimension = (
+                vector_field.get("params", {}).get("dim") if vector_field else None
+            )
+            if configured_dimension and int(configured_dimension) != dimension:
+                raise ValueError(
+                    "Milvus collection dimension mismatch: "
+                    f"collection={configured_dimension}, configured={dimension}. "
+                    "Use a new collection and re-index documents."
+                )
+
+    async def health(self) -> bool:
+        try:
+            return await asyncio.to_thread(
+                self.client.has_collection,
+                collection_name=self.collection,
+            )
+        except Exception:
+            return False
 
     async def upsert(self, chunks: list[Chunk]) -> None:
         if not chunks:
             return
-        data = [
-            {
+        data = []
+        for chunk in chunks:
+            entity = {
                 "id": chunk.id,
                 "vector": chunk.embedding,
                 "tenant_id": chunk.tenant_id,
@@ -116,13 +164,22 @@ class MilvusVectorStore:
                 "title": chunk.title[:512],
                 "position": chunk.position,
             }
-            for chunk in chunks
-        ]
-        self.client.upsert(collection_name=self.collection, data=data)
+            if self.has_document_version:
+                entity["document_version"] = chunk.document_version
+            data.append(entity)
+        await asyncio.to_thread(
+            self.client.upsert,
+            collection_name=self.collection,
+            data=data,
+        )
 
     async def delete(self, chunk_ids: list[str]) -> None:
         if chunk_ids:
-            self.client.delete(collection_name=self.collection, ids=chunk_ids)
+            await asyncio.to_thread(
+                self.client.delete,
+                collection_name=self.collection,
+                ids=chunk_ids,
+            )
 
     async def search(
         self, vector: list[float], principal: Principal, limit: int
@@ -139,24 +196,29 @@ class MilvusVectorStore:
             f'(visibility == "department" and department_id == "{department}") or '
             f'(visibility == "private" and owner_user_id == "{user}"))'
         )
-        results = self.client.search(
+        output_fields = [
+            "tenant_id",
+            "department_id",
+            "visibility",
+            "owner_user_id",
+            "document_id",
+            "content",
+            "source",
+            "title",
+            "position",
+        ]
+        if self.has_document_version:
+            output_fields.append("document_version")
+        search_results = await asyncio.to_thread(
+            self.client.search,
             collection_name=self.collection,
             data=[vector],
             filter=filter_expression,
             limit=limit,
-            output_fields=[
-                "tenant_id",
-                "department_id",
-                "visibility",
-                "owner_user_id",
-                "document_id",
-                "content",
-                "source",
-                "title",
-                "position",
-            ],
+            output_fields=output_fields,
             search_params={"metric_type": "COSINE", "params": {"ef": max(64, limit * 4)}},
-        )[0]
+        )
+        results = search_results[0]
         hits: list[SearchHit] = []
         for rank, result in enumerate(results, start=1):
             entity = result["entity"]
@@ -165,7 +227,7 @@ class MilvusVectorStore:
                 tenant_id=entity["tenant_id"],
                 department_id=entity["department_id"],
                 document_id=entity["document_id"],
-                document_version=1,
+                document_version=int(entity.get("document_version", 1)),
                 visibility=entity["visibility"],
                 content=entity["content"],
                 source=entity["source"],
@@ -173,5 +235,13 @@ class MilvusVectorStore:
                 position=entity["position"],
                 metadata={"owner_user_id": entity.get("owner_user_id", "")},
             )
-            hits.append(SearchHit(chunk=chunk, score=float(result["distance"]), dense_rank=rank))
+            similarity = float(result["distance"])
+            hits.append(
+                SearchHit(
+                    chunk=chunk,
+                    score=similarity,
+                    dense_score=similarity,
+                    dense_rank=rank,
+                )
+            )
         return hits

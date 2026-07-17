@@ -1,4 +1,4 @@
-name: enterprise-rag-agent-hub
+name: ragops-hub
 
 services:
   etcd:
@@ -20,8 +20,8 @@ services:
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     command: minio server /minio_data --console-address ":9001"
     ports:
       # Avoid the commonly occupied local 9001 port; container-to-container
@@ -59,12 +59,33 @@ services:
       timeout: 10s
       retries: 10
 
+  bootstrap:
+    build: .
+    profiles: ["full"]
+    command: ["python", "-m", "scripts.bootstrap_demo"]
+    environment:
+      AUTH_MODE: demo
+      VECTOR_BACKEND: milvus
+      MILVUS_URI: http://milvus:19530
+      MILVUS_COLLECTION: ragops_knowledge_v1
+      DATA_DIR: /app/data
+      EMBEDDING_PROVIDER: hash
+      EMBEDDING_DIMENSION: "384"
+      LLM_ENABLED: "false"
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      milvus:
+        condition: service_healthy
+
   app:
     build: .
     profiles: ["full"]
     environment:
+      AUTH_MODE: demo
       VECTOR_BACKEND: milvus
       MILVUS_URI: http://milvus:19530
+      MILVUS_COLLECTION: ragops_knowledge_v1
       DATA_DIR: /app/data
       EMBEDDING_PROVIDER: hash
       EMBEDDING_DIMENSION: "384"
@@ -74,8 +95,19 @@ services:
     volumes:
       - app-data:/app/data
     depends_on:
-      milvus:
-        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
 volumes:
   etcd-data:

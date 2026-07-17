@@ -50,6 +50,28 @@ async def main() -> None:
             title="其他租户政策",
             position=0,
         )
+        allowed.document_id = repository.create_document(
+            tenant_id="demo-company",
+            department_id="customer-service",
+            owner_user_id="demo-user",
+            title="退款政策",
+            source="refund.md",
+            visibility="public",
+            version=1,
+            content_hash="hash-allowed",
+        )
+        forbidden.document_id = repository.create_document(
+            tenant_id="other-company",
+            department_id="customer-service",
+            owner_user_id="other-user",
+            title="其他租户政策",
+            source="secret.md",
+            visibility="public",
+            version=1,
+            content_hash="hash-forbidden",
+        )
+        repository.save_chunks([allowed])
+        repository.save_chunks([forbidden])
         allowed.embedding, forbidden.embedding = await embedder.embed(
             [allowed.content, forbidden.content]
         )
@@ -89,4 +111,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
