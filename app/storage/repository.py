@@ -82,6 +82,40 @@ class SQLiteRepository:
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS customers (
+                id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                level TEXT NOT NULL,
+                industry TEXT NOT NULL,
+                company_size TEXT NOT NULL,
+                phone_masked TEXT NOT NULL,
+                email_masked TEXT NOT NULL,
+                last_contact_at TEXT NOT NULL,
+                PRIMARY KEY(id, tenant_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS support_cases (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                customer_user_id TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                order_id TEXT,
+                subject TEXT NOT NULL,
+                preview TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                status TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                assignee_user_id TEXT NOT NULL,
+                sla_due_at TEXT NOT NULL,
+                ticket_id TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS tickets (
                 id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL,
@@ -131,6 +165,41 @@ class SQLiteRepository:
         with self._lock, self._connect() as connection:
             for statement in statements:
                 connection.execute(statement)
+            order_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(orders)").fetchall()
+            }
+            order_migrations = {
+                "product_version": "TEXT NOT NULL DEFAULT '专业版'",
+                "purchased_at": "TEXT NOT NULL DEFAULT ''",
+                "valid_until": "TEXT NOT NULL DEFAULT ''",
+                "amount_cents": "INTEGER NOT NULL DEFAULT 0",
+                "seats_total": "INTEGER NOT NULL DEFAULT 0",
+                "seats_used": "INTEGER NOT NULL DEFAULT 0",
+                "knowledge_quota_gb": "INTEGER NOT NULL DEFAULT 0",
+                "knowledge_used_gb": "INTEGER NOT NULL DEFAULT 0",
+                "api_quota": "INTEGER NOT NULL DEFAULT 0",
+                "api_used": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in order_migrations.items():
+                if name not in order_columns:
+                    connection.execute(
+                        f"ALTER TABLE orders ADD COLUMN {name} {definition}"
+                    )
+            ticket_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(tickets)").fetchall()
+            }
+            ticket_migrations = {
+                "customer_user_id": "TEXT NOT NULL DEFAULT ''",
+                "case_id": "TEXT NOT NULL DEFAULT ''",
+                "order_id": "TEXT NOT NULL DEFAULT ''",
+            }
+            for name, definition in ticket_migrations.items():
+                if name not in ticket_columns:
+                    connection.execute(
+                        f"ALTER TABLE tickets ADD COLUMN {name} {definition}"
+                    )
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(documents)").fetchall()
@@ -171,6 +240,12 @@ class SQLiteRepository:
                 """
                 CREATE INDEX IF NOT EXISTS idx_chunks_access
                 ON chunks(tenant_id, visibility, department_id, document_id)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_support_cases_queue
+                ON support_cases(tenant_id, assignee_user_id, status, updated_at)
                 """
             )
             try:
@@ -217,10 +292,182 @@ class SQLiteRepository:
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
-                INSERT OR IGNORE INTO orders(id, tenant_id, user_id, status, product_name, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO customers(
+                    id, tenant_id, name, company_name, level, industry, company_size,
+                    phone_masked, email_masked, last_contact_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id, tenant_id) DO UPDATE SET
+                    name=excluded.name,
+                    company_name=excluded.company_name,
+                    level=excluded.level,
+                    industry=excluded.industry,
+                    company_size=excluded.company_size,
+                    phone_masked=excluded.phone_masked,
+                    email_masked=excluded.email_masked,
+                    last_contact_at=excluded.last_contact_at
                 """,
-                ("ORD-1001", "demo-company", "demo-user", "已发货", "企业知识库专业版", utc_now()),
+                (
+                    "demo-user",
+                    "demo-company",
+                    "王晨",
+                    "云帆科技（北京）有限公司",
+                    "标准客户",
+                    "互联网 / SaaS",
+                    "51-200 人",
+                    "138****5678",
+                    "wa***@yunfan.example",
+                    "2026-07-15T08:42:00+00:00",
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO orders(
+                    id, tenant_id, user_id, status, product_name, updated_at,
+                    product_version, purchased_at, valid_until, amount_cents,
+                    seats_total, seats_used, knowledge_quota_gb, knowledge_used_gb,
+                    api_quota, api_used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    tenant_id=excluded.tenant_id,
+                    user_id=excluded.user_id,
+                    status=excluded.status,
+                    product_name=excluded.product_name,
+                    updated_at=excluded.updated_at,
+                    product_version=excluded.product_version,
+                    purchased_at=excluded.purchased_at,
+                    valid_until=excluded.valid_until,
+                    amount_cents=excluded.amount_cents,
+                    seats_total=excluded.seats_total,
+                    seats_used=excluded.seats_used,
+                    knowledge_quota_gb=excluded.knowledge_quota_gb,
+                    knowledge_used_gb=excluded.knowledge_used_gb,
+                    api_quota=excluded.api_quota,
+                    api_used=excluded.api_used
+                """,
+                (
+                    "ORD-1001",
+                    "demo-company",
+                    "demo-user",
+                    "已生效",
+                    "企业知识库专业版",
+                    utc_now(),
+                    "专业版",
+                    "2026-06-20",
+                    "2027-06-19",
+                    3_600_000,
+                    10,
+                    6,
+                    1024,
+                    320,
+                    100_000,
+                    18_460,
+                ),
+            )
+            cases = [
+                (
+                    "CASE-1001",
+                    "demo-company",
+                    "demo-user",
+                    "王晨",
+                    "云帆科技",
+                    "ORD-1001",
+                    "登录失败与退款政策咨询",
+                    "企业知识库专业版登录失败，咨询退款资格",
+                    "high",
+                    "open",
+                    "在线客服",
+                    "agent-chenyu",
+                    "2026-07-18T02:24:00+00:00",
+                    "2026-07-17T02:24:00+00:00",
+                ),
+                (
+                    "CASE-1002",
+                    "demo-company",
+                    "customer-li",
+                    "李想",
+                    "星河制造",
+                    "ORD-0998",
+                    "知识库容量扩容",
+                    "团队文档增长较快，希望扩容知识库",
+                    "medium",
+                    "open",
+                    "邮件",
+                    "agent-chenyu",
+                    "2026-07-18T01:55:00+00:00",
+                    "2026-07-17T01:55:00+00:00",
+                ),
+                (
+                    "CASE-1003",
+                    "demo-company",
+                    "customer-zhao",
+                    "赵敏",
+                    "智联咨询",
+                    "ORD-0995",
+                    "SSE 接入配置报错",
+                    "生产环境接收流式事件时连接中断",
+                    "medium",
+                    "open",
+                    "在线客服",
+                    "agent-chenyu",
+                    "2026-07-18T01:17:00+00:00",
+                    "2026-07-17T01:17:00+00:00",
+                ),
+                (
+                    "CASE-1004",
+                    "demo-company",
+                    "customer-wu",
+                    "吴涛",
+                    "启明教育",
+                    "ORD-0992",
+                    "子账号权限不足",
+                    "新建子账号无法访问部门知识库",
+                    "low",
+                    "waiting",
+                    "企业微信",
+                    "agent-chenyu",
+                    "2026-07-18T00:46:00+00:00",
+                    "2026-07-17T00:46:00+00:00",
+                ),
+                (
+                    "CASE-1005",
+                    "demo-company",
+                    "customer-sun",
+                    "孙悦",
+                    "北辰医疗",
+                    "ORD-0989",
+                    "API 调用限流说明",
+                    "请求了解当前套餐的 API 限流策略",
+                    "low",
+                    "open",
+                    "邮件",
+                    "agent-chenyu",
+                    "2026-07-17T22:33:00+00:00",
+                    "2026-07-16T09:33:00+00:00",
+                ),
+            ]
+            connection.executemany(
+                """
+                INSERT INTO support_cases(
+                    id, tenant_id, customer_user_id, customer_name, company_name,
+                    order_id, subject, preview, priority, status, channel,
+                    assignee_user_id, sla_due_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    subject=excluded.subject,
+                    preview=excluded.preview,
+                    priority=excluded.priority,
+                    status=CASE
+                        WHEN support_cases.status='escalated' THEN support_cases.status
+                        ELSE excluded.status
+                    END,
+                    assignee_user_id=excluded.assignee_user_id,
+                    sla_due_at=excluded.sla_due_at,
+                    updated_at=excluded.updated_at
+                """,
+                cases,
             )
             connection.commit()
 
@@ -547,11 +794,137 @@ class SQLiteRepository:
 
     def query_order(self, principal: Principal, order_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM orders WHERE id=? AND tenant_id=? AND user_id=?",
-                (order_id, principal.tenant_id, principal.user_id),
-            ).fetchone()
+            if self._is_tenant_admin(principal):
+                row = connection.execute(
+                    "SELECT * FROM orders WHERE id=? AND tenant_id=?",
+                    (order_id, principal.tenant_id),
+                ).fetchone()
+            elif self._is_support_agent(principal):
+                row = connection.execute(
+                    """
+                    SELECT orders.* FROM orders
+                    WHERE orders.id=? AND orders.tenant_id=?
+                      AND EXISTS (
+                        SELECT 1 FROM support_cases
+                        WHERE support_cases.tenant_id=orders.tenant_id
+                          AND support_cases.order_id=orders.id
+                          AND support_cases.assignee_user_id=?
+                      )
+                    """,
+                    (order_id, principal.tenant_id, principal.user_id),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM orders WHERE id=? AND tenant_id=? AND user_id=?",
+                    (order_id, principal.tenant_id, principal.user_id),
+                ).fetchone()
         return dict(row) if row else None
+
+    def list_support_cases(self, principal: Principal) -> list[dict[str, Any]]:
+        if not self._is_support_agent(principal):
+            return []
+        with self._connect() as connection:
+            if self._is_tenant_admin(principal):
+                rows = connection.execute(
+                    """
+                    SELECT * FROM support_cases
+                    WHERE tenant_id=?
+                    ORDER BY
+                        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                        updated_at DESC
+                    """,
+                    (principal.tenant_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM support_cases
+                    WHERE tenant_id=? AND assignee_user_id=?
+                    ORDER BY
+                        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                        updated_at DESC
+                    """,
+                    (principal.tenant_id, principal.user_id),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_support_case(
+        self, principal: Principal, case_id: str
+    ) -> dict[str, Any] | None:
+        if not self._is_support_agent(principal):
+            return None
+        with self._connect() as connection:
+            if self._is_tenant_admin(principal):
+                case_row = connection.execute(
+                    "SELECT * FROM support_cases WHERE id=? AND tenant_id=?",
+                    (case_id, principal.tenant_id),
+                ).fetchone()
+            else:
+                case_row = connection.execute(
+                    """
+                    SELECT * FROM support_cases
+                    WHERE id=? AND tenant_id=? AND assignee_user_id=?
+                    """,
+                    (case_id, principal.tenant_id, principal.user_id),
+                ).fetchone()
+            if not case_row:
+                return None
+            customer_row = connection.execute(
+                """
+                SELECT * FROM customers
+                WHERE id=? AND tenant_id=?
+                """,
+                (case_row["customer_user_id"], principal.tenant_id),
+            ).fetchone()
+            order_row = (
+                connection.execute(
+                    "SELECT * FROM orders WHERE id=? AND tenant_id=?",
+                    (case_row["order_id"], principal.tenant_id),
+                ).fetchone()
+                if case_row["order_id"]
+                else None
+            )
+        return {
+            "case": dict(case_row),
+            "customer": dict(customer_row) if customer_row else None,
+            "order": dict(order_row) if order_row else None,
+        }
+
+    def mark_support_case_escalated(
+        self,
+        principal: Principal,
+        case_id: str,
+        ticket_id: str,
+    ) -> bool:
+        if not case_id or not self._is_support_agent(principal):
+            return False
+        with self._lock, self._connect() as connection:
+            if self._is_tenant_admin(principal):
+                cursor = connection.execute(
+                    """
+                    UPDATE support_cases
+                    SET status='escalated', ticket_id=?, updated_at=?
+                    WHERE id=? AND tenant_id=?
+                    """,
+                    (ticket_id, utc_now(), case_id, principal.tenant_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE support_cases
+                    SET status='escalated', ticket_id=?, updated_at=?
+                    WHERE id=? AND tenant_id=? AND assignee_user_id=?
+                    """,
+                    (
+                        ticket_id,
+                        utc_now(),
+                        case_id,
+                        principal.tenant_id,
+                        principal.user_id,
+                    ),
+                )
+            connection.commit()
+        return bool(cursor.rowcount)
 
     def set_pending_action(self, conversation_id: str, principal: Principal, action: dict[str, Any]) -> None:
         now = utc_now()
@@ -617,6 +990,10 @@ class SQLiteRepository:
         subject: str,
         description: str,
         idempotency_key: str,
+        *,
+        customer_user_id: str = "",
+        case_id: str = "",
+        order_id: str = "",
     ) -> dict[str, Any]:
         with self._lock, self._connect() as connection:
             ticket_id = f"TKT-{uuid.uuid4().hex[:8].upper()}"
@@ -624,9 +1001,9 @@ class SQLiteRepository:
                 """
                 INSERT OR IGNORE INTO tickets(
                     id, tenant_id, user_id, subject, description, status,
-                    idempotency_key, created_at
+                    idempotency_key, created_at, customer_user_id, case_id, order_id
                 )
-                VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)
                 """,
                 (
                     ticket_id,
@@ -636,6 +1013,9 @@ class SQLiteRepository:
                     description,
                     idempotency_key,
                     utc_now(),
+                    customer_user_id,
+                    case_id,
+                    order_id,
                 ),
             )
             connection.commit()
@@ -644,6 +1024,49 @@ class SQLiteRepository:
                 (principal.tenant_id, idempotency_key),
             ).fetchone()
         return dict(row)
+
+    def get_ops_summary(self, principal: Principal) -> dict[str, Any]:
+        with self._connect() as connection:
+            metrics = {
+                "documents": connection.execute(
+                    "SELECT COUNT(*) FROM documents WHERE tenant_id=? AND status='ready'",
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+                "chunks": connection.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE tenant_id=?",
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+                "open_cases": connection.execute(
+                    """
+                    SELECT COUNT(*) FROM support_cases
+                    WHERE tenant_id=? AND status IN ('open', 'waiting')
+                    """,
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+                "open_tickets": connection.execute(
+                    "SELECT COUNT(*) FROM tickets WHERE tenant_id=? AND status='open'",
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+                "conversations": connection.execute(
+                    "SELECT COUNT(*) FROM conversations WHERE tenant_id=?",
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+                "audit_events": connection.execute(
+                    "SELECT COUNT(*) FROM audit_logs WHERE tenant_id=?",
+                    (principal.tenant_id,),
+                ).fetchone()[0],
+            }
+            audits = connection.execute(
+                """
+                SELECT action, resource_type, resource_id, created_at
+                FROM audit_logs
+                WHERE tenant_id=?
+                ORDER BY created_at DESC
+                LIMIT 8
+                """,
+                (principal.tenant_id,),
+            ).fetchall()
+        return {"metrics": metrics, "recent_audits": [dict(row) for row in audits]}
 
     def save_message(
         self,
@@ -741,3 +1164,13 @@ class SQLiteRepository:
             position=row["position"],
             metadata=json.loads(row["metadata_json"]),
         )
+
+    @staticmethod
+    def _is_support_agent(principal: Principal) -> bool:
+        return bool(
+            {"support_agent", "support_manager", "admin"}.intersection(principal.roles)
+        )
+
+    @staticmethod
+    def _is_tenant_admin(principal: Principal) -> bool:
+        return bool({"support_manager", "admin"}.intersection(principal.roles))

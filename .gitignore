@@ -11,3 +11,4 @@ data/uploads/
 data/milvus/
 *.pyc
 .DS_Store
+.private/

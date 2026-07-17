@@ -2,14 +2,15 @@
 
 ## 1. 系统边界
 
-RAGOps Hub 分为六层：
+RAGOps Hub 面向 B2B SaaS 售后客服，分为七层：
 
-1. API 层：HTTP、文件上传、SSE 协议和 Demo Header/JWT 身份解析。
-2. Agent 层：安全检查、意图路由、RAG 分支、工具分支和人工确认。
-3. RAG 层：解析、结构化切分、Embedding、Milvus Dense、FTS5/BM25、RRF 和重排。
-4. 存储层：SQLite 保存业务元数据，Milvus 或内存适配器保存向量。
-5. 模型层：离线 Hash Embedding/抽取式回答，或 OpenAI-compatible API。
-6. 可观测层：结构化 SSE 事件、耗时、引用和审计日志。
+1. 体验层：客服工作台、知识运营和运行评测。
+2. API 层：客户会话、HTTP、文件上传、SSE 协议和 Demo Header/JWT 身份解析。
+3. Agent 层：安全检查、意图路由、RAG 分支、工具分支和人工确认。
+4. RAG 层：解析、结构化切分、Embedding、Milvus Dense、FTS5/BM25、RRF 和重排。
+5. 存储层：SQLite 保存客户、订单、Case、工单和知识元数据，Milvus 或内存适配器保存向量。
+6. 模型层：离线 Hash Embedding/抽取式回答，或 OpenAI-compatible API。
+7. 可观测层：结构化 SSE 事件、耗时、引用和审计日志。
 
 ## 2. 多租户安全
 
@@ -64,10 +65,23 @@ message_start
   -> message_end
 ```
 
-订单工具按租户和用户查询，防止水平越权。工单工具使用二次确认和幂等键，体现有副作用工具
-与只读工具的不同治理方式。Pending Action 与 tenant、user、conversation 绑定，其他用户不能覆盖。
+普通客户身份查询订单时使用租户和订单所有人校验；客服身份还必须具备支持角色，并且订单关联的
+Support Case 已分配给当前客服。主管和管理员可以访问本租户业务对象。工单工具使用二次确认和
+幂等键，体现有副作用工具与只读工具的不同治理方式。Pending Action 与 tenant、user、conversation
+绑定，其他用户不能覆盖。创建成功后，Ticket 会回写到 Support Case，并关联 Customer 与 Order。
 
-## 6. SSE 事件协议
+## 6. 客服工作台上下文
+
+工作台不是通用聊天页面，而是围绕 Support Case 组织：
+
+```text
+Case Queue -> Customer + Order + Entitlement -> RAG / Tool -> Reply -> Ticket Confirmation
+```
+
+队列按租户和 assignee 过滤；右侧上下文来自 CRM/订单领域数据；中间对话只消费结构化 Agent 事件。
+本地实现使用 SQLite 适配器，生产可替换为 CRM、订单/计费和 Helpdesk 连接器。
+
+## 7. SSE 事件协议
 
 事件类型包括 `message_start`、`intent_classified`、`retrieval_start`、
 `retrieval_finished`、`tool_start`、`tool_finished`、`human_confirmation_required`、

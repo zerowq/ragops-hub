@@ -55,6 +55,56 @@ async def list_documents(
     return container.repository.list_documents(principal)
 
 
+@router.get("/support/cases")
+async def list_support_cases(
+    principal: Principal = Depends(get_principal),
+    container: Container = Depends(get_container),
+) -> list[dict[str, object]]:
+    if not {"support_agent", "support_manager", "admin"}.intersection(principal.roles):
+        raise HTTPException(403, "Support role is required")
+    return container.repository.list_support_cases(principal)
+
+
+@router.get("/support/cases/{case_id}")
+async def get_support_case(
+    case_id: str,
+    principal: Principal = Depends(get_principal),
+    container: Container = Depends(get_container),
+) -> dict[str, object]:
+    context = container.repository.get_support_case(principal, case_id)
+    if context is None:
+        raise HTTPException(404, "Support case not found or not accessible")
+    pending_action = container.repository.get_pending_action(case_id, principal)
+    return {**context, "pending_action": pending_action}
+
+
+@router.post("/support/cases/{case_id}/pending-action/cancel")
+async def cancel_support_case_pending_action(
+    case_id: str,
+    principal: Principal = Depends(get_principal),
+    container: Container = Depends(get_container),
+) -> dict[str, object]:
+    result = await container.tools.cancel_pending(principal, case_id)
+    if not result["ok"]:
+        raise HTTPException(404, str(result.get("error", "Pending action not found")))
+    return result
+
+
+@router.get("/ops/summary")
+async def ops_summary(
+    principal: Principal = Depends(get_principal),
+    container: Container = Depends(get_container),
+) -> dict[str, object]:
+    if not {
+        "support_agent",
+        "support_manager",
+        "knowledge_admin",
+        "admin",
+    }.intersection(principal.roles):
+        raise HTTPException(403, "Operational role is required")
+    return container.repository.get_ops_summary(principal)
+
+
 @router.post("/documents")
 async def upload_document(
     file: UploadFile = File(...),
@@ -136,6 +186,29 @@ async def search(
     }
 
 
+@router.get("/chunks/{chunk_id}")
+async def get_chunk_source(
+    chunk_id: str,
+    principal: Principal = Depends(get_principal),
+    container: Container = Depends(get_container),
+) -> dict[str, object]:
+    if chunk_id not in container.repository.filter_accessible_chunk_ids(
+        principal, [chunk_id]
+    ):
+        raise HTTPException(404, "Chunk not found or not accessible")
+    chunk = container.repository.get_chunk(chunk_id)
+    if chunk is None:
+        raise HTTPException(404, "Chunk not found")
+    return {
+        "chunk_id": chunk.id,
+        "title": chunk.title,
+        "source": chunk.source,
+        "position": chunk.position,
+        "content": chunk.content,
+        "metadata": chunk.metadata,
+    }
+
+
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
@@ -145,7 +218,10 @@ async def chat_stream(
     async def stream() -> AsyncIterator[str]:
         try:
             async for event in container.agent.stream(
-                request.message, request.conversation_id, principal
+                request.message,
+                request.conversation_id,
+                principal,
+                request.case_id,
             ):
                 yield encode_sse(event)
         except Exception as error:

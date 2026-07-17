@@ -21,4 +21,28 @@ def test_order_sse_endpoint() -> None:
     )
     assert response.status_code == 200
     assert "event: tool_finished" in response.text
-    assert "已发货" in response.text
+    assert "已生效" in response.text
+
+
+def test_support_workspace_loads_assigned_case_context() -> None:
+    headers = {
+        "X-Tenant-ID": "demo-company",
+        "X-User-ID": "agent-chenyu",
+        "X-Department-ID": "customer-service",
+        "X-Roles": "support_agent,knowledge_admin",
+    }
+    client = TestClient(app)
+
+    cases = client.get("/api/v1/support/cases", headers=headers)
+    context = client.get("/api/v1/support/cases/CASE-1001", headers=headers)
+
+    assert cases.status_code == 200
+    assert cases.json()[0]["id"] == "CASE-1001"
+    assert context.status_code == 200
+    assert context.json()["customer"]["name"] == "王晨"
+    assert context.json()["order"]["id"] == "ORD-1001"
+
+
+def test_employee_cannot_open_support_queue() -> None:
+    response = TestClient(app).get("/api/v1/support/cases")
+    assert response.status_code == 403

@@ -1,35 +1,81 @@
 # RAGOps Hub
 
-面向求职展示和工程学习的多租户企业知识库 RAG + 客服 Agent。项目强调可解释的工程取舍：
-权限前置过滤、Hybrid Retrieval、引用溯源、有副作用工具确认、幂等与审计，而不是只做一个聊天页面。
+RAGOps Hub 是一个面向 B2B SaaS 售后客服的多租户 RAG + Agent 工程样板。它把客户会话、订单订阅、
+知识检索和技术工单放进同一个客服工作台，重点解决“客服能否安全、可追溯地使用企业知识和业务工具”。
+
+## 产品预览
+
+### 1. 企业售后客服工作台
+
+![企业售后客服工作台：会话队列、Agent 对话、客户和订单上下文](docs/images/customer-workbench.jpg)
+
+左侧展示分配给当前客服的客户会话；中间是支持 SSE 流式事件和引用溯源的 Agent 对话；右侧聚合
+客户画像、订单、服务期、套餐权益和待确认工单。订单查询会校验租户、客服角色和 Case 分配，
+创建工单必须经过人工确认。
+
+### 2. 知识运营与检索验收
+
+![知识运营：文档上传、权限范围和 Hybrid Retrieval 检索验收](docs/images/knowledge-operations.jpg)
+
+知识管理员可以上传 PDF、Word、Markdown 和 TXT，设置部门、企业公开或个人可见范围；右侧使用
+真实客服问法验证 Dense、BM25、RRF 与轻量重排的召回结果，并可继续打开原始 Chunk 核验来源。
+
+### 3. 运行状态、离线评测与审计
+
+![运行评测：服务健康度、离线检索指标和操作审计](docs/images/runtime-evaluation.jpg)
+
+运行页面展示数据库和向量后端健康度、文档与 Chunk 数量、待处理会话、开放工单和审计事件；
+离线基线明确区分技术验证与生产效果，工具调用、工单确认和安全操作均保留审计轨迹。
+
+## 业务场景
+
+客服处理登录失败、套餐权益、退款政策或 API 接入问题时，需要同时核对客户、订单、服务期和知识库。
+RAGOps Hub 将这条链路设计为：
+
+```text
+分配给客服的客户会话
+        ↓
+加载客户 + 订单 + 套餐权益
+        ↓
+权限过滤后的 Hybrid RAG / 只读订单工具
+        ↓
+带来源的答复建议
+        ↓
+需要升级时生成待确认工单
+        ↓
+人工确认 → 幂等写入 → 审计
+```
+
+当前仓库提供一套可运行的脱敏示例数据，并保留 CRM、订单系统、IAM、Helpdesk 和企业文档源的适配边界。
+场景和数据模型详见 [docs/BUSINESS_SCENARIO.md](docs/BUSINESS_SCENARIO.md)。
 
 ## 能力概览
 
-- 多格式文档：PDF、DOCX、Markdown、TXT。
-- 文档生命周期：SHA-256 去重、版本、状态、增量删除。
-- Hybrid RAG：Milvus Dense + SQLite FTS5/BM25 + RRF + 轻量 Rerank。
-- 向量后端：零依赖内存模式 / Milvus Standalone。
-- 多租户：Tenant、Department、Owner、Public/Department/Private 可见范围。
-- Agent：知识问答、订单查询、工单创建、Human-in-the-loop。
-- 安全：Prompt Injection 规则防线、工具权限校验、工单幂等和审计。
-- SSE：结构化检索、工具、Token、引用和结束事件。
-- 模型：离线 Hash Embedding + 抽取式回答，或 OpenAI-compatible API。
-- 评测：Source Recall@K、MRR 和检索延迟。
+- 客服工作台：会话队列、客户画像、订单订阅、套餐权益和 SLA 上下文。
+- 多格式知识：PDF、DOCX、Markdown、TXT，支持哈希去重、版本和生命周期状态。
+- Hybrid RAG：Milvus Dense + SQLite FTS5/BM25 + RRF + 轻量重排。
+- 权限控制：Tenant、Department、Owner、Public/Department/Private 可见范围。
+- 受控工具：订单查询按租户、角色和案件分配校验；工单创建必须人工确认。
+- 安全与治理：Prompt Injection 防护、工单幂等、结构化审计和引用溯源。
+- 流式交互：SSE 返回检索、工具、确认、正文、引用、错误和结束事件。
+- 知识运营：文档入库、文档列表、检索验收和来源预览。
+- 运行评测：服务健康度、业务计数、审计轨迹和离线检索基线。
+- 双运行模式：零外部依赖的本地模式，或 Docker Compose + Milvus Standalone。
 
 ## 架构
 
 ```text
-Web / API Client
-       |
-       v
-FastAPI + Principal(X-Tenant/User/Department)
-       |
-       v
+客服工作台 / 知识运营 / 运行评测
+                |
+                v
+FastAPI + Principal(Tenant / User / Department / Roles)
+                |
+                v
 Prompt Guard -> Intent Router
-       |             |                    |
-       |             |                    +-> Ticket Tool -> Confirm -> Idempotent Write
-       |             +-> Order Tool -> Owner Check -> Audit
-       v
+      |              |                         |
+      |              |                         +-> Ticket Tool -> Confirm -> Idempotent Write
+      |              +-> Order Tool -> Case Assignment + Tenant ACL -> Audit
+      v
 Hybrid Retriever
   |          |
   v          v
@@ -39,15 +85,15 @@ Milvus     SQLite Persistent Inverted Index
    RRF Fusion -> Lightweight Rerank -> Grounded Answer -> SSE + Citations
 ```
 
-更完整的设计解释见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，面试知识点见
-[docs/INTERVIEW_KNOWLEDGE.md](docs/INTERVIEW_KNOWLEDGE.md)，逐步实现逻辑见
-[docs/IMPLEMENTATION_STEPS.md](docs/IMPLEMENTATION_STEPS.md)。设计审查与修复记录见
-[docs/DESIGN_REVIEW.md](docs/DESIGN_REVIEW.md)，完整口语化问答见
-[docs/INTERVIEW_QA.md](docs/INTERVIEW_QA.md)。
+更完整的技术设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，实现顺序见
+[docs/IMPLEMENTATION_STEPS.md](docs/IMPLEMENTATION_STEPS.md)，设计审查记录见
+[docs/DESIGN_REVIEW.md](docs/DESIGN_REVIEW.md)。
 
-## 1. 最快启动：离线演示模式
+## 快速启动
 
-该模式不需要 Docker、Milvus 或模型密钥。
+### 方式一：本地离线模式
+
+不需要 Docker、Milvus 或模型密钥。
 
 ```bash
 python3 -m venv .venv
@@ -59,31 +105,51 @@ cp .env.example .env
 
 访问：
 
-- 演示页面：http://127.0.0.1:8000
+- 客服工作台：http://127.0.0.1:8000
 - Swagger：http://127.0.0.1:8000/docs
 - 健康检查：http://127.0.0.1:8000/api/v1/health
 
-演示订单：`ORD-1001`，默认身份为：
+脱敏示例：会话 `CASE-1001`、客户王晨、订单 `ORD-1001`。工作台使用客服身份：
 
 ```text
 Tenant: demo-company
-User: demo-user
+User: agent-chenyu
 Department: customer-service
+Roles: support_agent,knowledge_admin
 ```
 
-注意：内存向量模式本身不持久化 Dense 向量，但业务 Chunk 和 FTS5 索引保存在 SQLite。应用每次
-启动时会读取所有 `ready` Chunk、重新生成 Embedding 并装载内存向量库，因此运行一次
-`python -m scripts.bootstrap_demo` 完成样例入库后，后续只需重启应用。
+内存模式只是不持久化 Dense 向量；文档、Chunk 和 FTS5 索引保存在 SQLite。应用重启时会为所有
+`ready` Chunk 重新生成 Embedding 并装载内存向量库。
 
-## 2. Milvus Standalone 模式
+### 方式二：一键 Docker Compose
 
-Mac 16GB 建议只启动 Milvus 依赖，FastAPI 在宿主机运行：
+完整容器模式会启动 etcd、MinIO、Milvus、样例入库任务和 API：
+
+```bash
+docker compose --profile full up -d --build
+docker compose --profile full ps
+```
+
+应用健康后可访问：
+
+- 客服工作台：http://127.0.0.1:8000
+- Swagger：http://127.0.0.1:8000/docs
+- Milvus WebUI：http://127.0.0.1:9091/webui/
+- MinIO Console：http://127.0.0.1:19001
+
+停止环境：
+
+```bash
+docker compose --profile full down
+```
+
+资源受限时，可只启动第三方中间件，让 API 在宿主机运行：
 
 ```bash
 docker compose up -d etcd minio milvus
 ```
 
-`.env` 修改：
+然后在 `.env` 中配置：
 
 ```dotenv
 VECTOR_BACKEND=milvus
@@ -93,41 +159,9 @@ EMBEDDING_DIMENSION=384
 LLM_ENABLED=false
 ```
 
-然后：
+## 接入真实模型
 
-```bash
-.venv/bin/python -m scripts.bootstrap_demo
-.venv/bin/uvicorn app.main:app --reload
-```
-
-Milvus WebUI：http://127.0.0.1:9091/webui/  
-MinIO Console：http://127.0.0.1:19001（宿主机使用 19001，避免常见的 9001 端口冲突）
-
-完整容器模式会自动启动 etcd、MinIO、Milvus，执行样例知识入库，然后启动 API：
-
-```bash
-docker compose --profile full up -d --build
-```
-
-查看状态：
-
-```bash
-docker compose --profile full ps
-docker compose --profile full logs bootstrap app
-```
-
-应用健康后可访问演示页面 `http://127.0.0.1:8000`、Swagger `http://127.0.0.1:8000/docs`、
-Milvus WebUI `http://127.0.0.1:9091/webui/` 和 MinIO Console `http://127.0.0.1:19001`。
-
-停止完整环境：
-
-```bash
-docker compose --profile full down
-```
-
-## 3. 接入真实模型
-
-任何支持 OpenAI-compatible API 的服务都可以使用：
+任何支持 OpenAI-compatible API 的服务都可以通过配置接入：
 
 ```dotenv
 EMBEDDING_PROVIDER=openai
@@ -139,32 +173,31 @@ OPENAI_BASE_URL=https://your-endpoint/v1
 OPENAI_API_KEY=your-key
 ```
 
-切换 Embedding 模型前必须更换 Milvus Collection 名称并重新入库，不能把不同向量空间的数据混在
-同一个 Collection 中。
+切换 Embedding 模型时必须使用新的 Milvus Collection 并重新入库，不能混用不同向量空间。
 
-## 4. API 示例
+## API 示例
+
+列出分配给当前客服的会话：
+
+```bash
+curl http://127.0.0.1:8000/api/v1/support/cases \
+  -H 'X-Tenant-ID: demo-company' \
+  -H 'X-User-ID: agent-chenyu' \
+  -H 'X-Department-ID: customer-service' \
+  -H 'X-Roles: support_agent,knowledge_admin'
+```
 
 上传文档：
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/documents \
   -H 'X-Tenant-ID: demo-company' \
-  -H 'X-User-ID: demo-user' \
+  -H 'X-User-ID: agent-chenyu' \
   -H 'X-Department-ID: customer-service' \
+  -H 'X-Roles: support_agent,knowledge_admin' \
   -F 'visibility=department' \
   -F 'version=1' \
   -F 'file=@samples/knowledge/refund-policy.md'
-```
-
-直接检索：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/search \
-  -H 'Content-Type: application/json' \
-  -H 'X-Tenant-ID: demo-company' \
-  -H 'X-User-ID: demo-user' \
-  -H 'X-Department-ID: customer-service' \
-  -d '{"query":"首次购买后多久能退款"}'
 ```
 
 SSE Agent：
@@ -173,46 +206,44 @@ SSE Agent：
 curl -N -X POST http://127.0.0.1:8000/api/v1/chat/stream \
   -H 'Content-Type: application/json' \
   -H 'X-Tenant-ID: demo-company' \
-  -H 'X-User-ID: demo-user' \
+  -H 'X-User-ID: agent-chenyu' \
   -H 'X-Department-ID: customer-service' \
-  -d '{"message":"查询订单 ORD-1001","conversation_id":"demo-c1"}'
+  -H 'X-Roles: support_agent,knowledge_admin' \
+  -d '{"message":"查询订单 ORD-1001","conversation_id":"CASE-1001","case_id":"CASE-1001"}'
 ```
 
 工单流程：
 
 ```text
-1. 发送“产品无法登录，请帮我创建工单”
-2. Agent 返回 human_confirmation_required
-3. 同一 conversation_id 发送“确认”
-4. Agent 使用幂等键创建工单并返回编号
+1. 当前客服发送“请基于当前客户问题准备技术支持工单”
+2. Agent 返回 human_confirmation_required，并在服务端保存 Pending Action
+3. 同一客服、同一 CASE conversation_id 发送“确认”
+4. Agent 使用幂等键创建工单，将工单关联回客户、订单和会话，并记录审计
 ```
 
-## 5. 运行评测
+## 评测与测试
 
-先在同一个进程使用 Milvus 模式完成样例入库，或在测试脚本中使用本地容器：
+运行检索评测：
 
 ```bash
 .venv/bin/python -m scripts.evaluate
 ```
 
-输出包括 Source Recall@K、MRR、平均检索延迟和每题排名。样例只有 5 题，正式面试展示应扩展到
-至少 50 题，并覆盖事实题、同义改写、术语、无答案和越权问题。
+输出包括 Source Recall@K、MRR、平均检索延迟和每题排名。仓库示例集只有 5 题，仅用于验证链路和
+回归基线；业务验收应使用脱敏真实问法，并覆盖无答案、术语、权限和对抗样本。
 
-## 6. 测试
+运行自动化测试和代码检查：
 
 ```bash
 .venv/bin/pytest -q
 .venv/bin/ruff check app tests scripts
 ```
 
-测试覆盖：结构化 Chunk、Prompt Injection、租户隔离、私有文档 ACL、会话归属、双写补偿、
-混合检索回归、订单越权边界和工单二次确认。
-
-## 7. 项目目录
+## 项目目录
 
 ```text
 app/
-  agent/       意图路由、Workflow 和受控工具
+  agent/       意图路由、工作流和受控工具
   api/         FastAPI、身份依赖、SSE 和 Schema
   core/        配置
   domain/      领域实体
@@ -221,24 +252,22 @@ app/
   rag/         解析、Chunk、入库、BM25、RRF、Rerank
   security/    Prompt Injection 防线
   storage/     SQLite 与 Milvus 适配器
-docs/          架构和面试知识点
-frontend/      最小演示页面
+docs/          业务场景、架构、实现和设计审查
+frontend/      客服工作台、知识运营和运行评测
 samples/       示例知识和评测集
-scripts/       入库与评测
+scripts/       入库、自检与评测
 tests/         自动化测试
 ```
 
-## 8. 生产化差距
+## 生产化边界
 
-该仓库是企业工程样板，不冒充真实大规模生产系统。进一步生产化需要：
+该仓库提供可运行的企业工程基线，但不声明已经承载大规模生产流量。真实部署通常还需要：
 
-- 生产使用 OIDC/JWKS 替换演示 Header 和示例 HS256 JWT。
-- PostgreSQL 替换 SQLite，并增加迁移工具和连接池。
-- 对象存储、病毒扫描、PII 检测和异步解析队列。
-- 在现有补偿和孤立向量过滤基础上增加完整 Outbox 与一致性巡检。
-- 专业 Reranker、模型路由、限流、熔断、Token 配额。
-- OpenTelemetry、Prometheus、结构化日志和告警。
-- SSE 心跳、断线续传、取消和代理超时。
-- 线上评测、人工反馈和知识库回滚。
-
-这些差距被明确列出，是为了面试时能诚实地区分“已实现”“技术验证”和“生产方案”。
+- 使用 OIDC/JWKS 和企业 IAM 替换演示 Header 与示例 HS256 JWT。
+- 使用 PostgreSQL、迁移工具和连接池替换单机 SQLite。
+- 对接 CRM、订单/计费、Helpdesk 和对象存储；增加同步任务与数据质量校验。
+- 增加病毒扫描、PII/DLP 检测、异步解析队列和完整 Outbox/Saga。
+- 使用专业 Reranker、模型路由、限流、熔断和租户 Token 配额。
+- 接入 OpenTelemetry、Prometheus、结构化日志、SLA 告警和成本看板。
+- 为 SSE 增加心跳、断线续传、任务取消、代理超时和客户端背压。
+- 建立线上反馈、知识过期治理、回滚机制和持续评测集。

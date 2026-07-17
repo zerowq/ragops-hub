@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=12_000)
     conversation_id: str = Field(default="demo-conversation", min_length=1, max_length=128)
+    case_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class SearchRequest(BaseModel):
@@ -22,4 +23,3 @@ class TicketRequest(BaseModel):
 class DocumentMetadata(BaseModel):
     visibility: Literal["public", "department", "private"] = "department"
     version: int = Field(default=1, ge=1)
-

@@ -30,7 +30,11 @@ class EnterpriseAgentService:
         self.tools = tools
 
     async def stream(
-        self, message: str, conversation_id: str, principal: Principal
+        self,
+        message: str,
+        conversation_id: str,
+        principal: Principal,
+        case_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         started = time.perf_counter()
         yield AgentEvent("message_start", {"conversation_id": conversation_id})
@@ -71,15 +75,38 @@ class EnterpriseAgentService:
                 yield AgentEvent("tool_finished", {"tool": "query_order", "result": result})
                 if result["ok"]:
                     order = result["order"]
-                    answer = f"订单 {order['id']} 当前状态为“{order['status']}”，商品：{order['product_name']}。"
+                    service_period = (
+                        f"，服务期：{order['purchased_at']} 至 {order['valid_until']}"
+                        if order.get("purchased_at") and order.get("valid_until")
+                        else ""
+                    )
+                    answer = (
+                        f"订单 {order['id']} 当前状态为“{order['status']}”，"
+                        f"商品：{order['product_name']}（{order['product_version']}）"
+                        f"{service_period}。"
+                    )
                 else:
                     answer = str(result["error"])
             async for event in self._emit_text(answer):
                 yield event
 
         elif intent is Intent.CREATE_TICKET:
-            subject = "客服问题"
-            result = await self.tools.prepare_ticket(principal, conversation_id, subject, message)
+            case_context = (
+                self.repository.get_support_case(principal, case_id)
+                if case_id
+                else None
+            )
+            case = case_context["case"] if case_context else {}
+            subject = str(case.get("subject") or "客服问题")
+            result = await self.tools.prepare_ticket(
+                principal,
+                conversation_id,
+                subject,
+                message,
+                case_id=str(case.get("id", "")),
+                order_id=str(case.get("order_id", "")),
+                customer_user_id=str(case.get("customer_user_id", "")),
+            )
             yield AgentEvent("human_confirmation_required", result)
             answer = f"将创建工单：{subject}，内容为“{message}”。回复“确认”后提交。"
             async for event in self._emit_text(answer):

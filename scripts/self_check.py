@@ -94,7 +94,7 @@ async def main() -> None:
         answer = "".join(
             event.data.get("content", "") for event in events if event.event == "text_delta"
         )
-        assert "已发货" in answer
+        assert "已生效" in answer
 
         first = [
             event async for event in agent.stream("产品故障，请创建工单", "ticket-check", principal)

@@ -1,86 +1,197 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-view="workbench">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RAGOps Hub</title>
-  <style>
-    :root { color-scheme: light; --ink:#102338; --muted:#637285; --line:#dce4ec; --brand:#176b87; --soft:#edf7f9; }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif; background:#f5f7fa; color:var(--ink); }
-    main { max-width:1120px; margin:0 auto; padding:32px 20px 56px; }
-    header { display:flex; justify-content:space-between; gap:20px; align-items:end; margin-bottom:24px; }
-    h1 { margin:0; font-size:30px; letter-spacing:-.5px; }
-    header p { margin:7px 0 0; color:var(--muted); }
-    .badge { background:var(--soft); color:var(--brand); padding:8px 12px; border-radius:999px; font-weight:600; font-size:13px; }
-    .grid { display:grid; grid-template-columns:340px 1fr; gap:18px; }
-    .card { background:white; border:1px solid var(--line); border-radius:16px; box-shadow:0 12px 35px rgba(27,52,75,.06); overflow:hidden; }
-    .panel { padding:20px; }
-    h2 { font-size:17px; margin:0 0 14px; }
-    label { display:block; font-size:12px; color:var(--muted); margin:12px 0 5px; }
-    input, select, textarea { width:100%; border:1px solid #cfd8e2; border-radius:9px; padding:10px 11px; font:inherit; background:white; }
-    button { border:0; background:var(--brand); color:white; padding:10px 15px; border-radius:9px; font-weight:650; cursor:pointer; }
-    button.secondary { background:#e9eef3; color:var(--ink); }
-    .row { display:flex; gap:8px; align-items:center; }
-    .chat { height:550px; display:flex; flex-direction:column; }
-    #messages { flex:1; overflow:auto; padding:20px; background:linear-gradient(#fbfcfd,#f7fafc); }
-    .message { max-width:84%; padding:11px 13px; border-radius:13px; margin:0 0 12px; line-height:1.55; white-space:pre-wrap; }
-    .user { margin-left:auto; background:#176b87; color:white; border-bottom-right-radius:3px; }
-    .assistant { background:white; border:1px solid var(--line); border-bottom-left-radius:3px; }
-    .events { font-size:11px; color:var(--muted); margin-top:6px; }
-    .composer { border-top:1px solid var(--line); padding:14px; display:grid; grid-template-columns:1fr auto; gap:10px; }
-    .composer textarea { min-height:46px; max-height:110px; resize:vertical; }
-    #status { min-height:18px; margin-top:10px; font-size:12px; color:var(--muted); }
-    .examples button { display:block; width:100%; text-align:left; margin:7px 0; background:#f3f6f8; color:var(--ink); font-weight:500; }
-    @media (max-width:800px) { .grid { grid-template-columns:1fr; } .chat { height:620px; } header { align-items:start; flex-direction:column; } }
-  </style>
+  <meta name="description" content="RAGOps Hub 企业售后客服 Copilot">
+  <title>RAGOps Hub · 企业售后客服 Copilot</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
-<main>
-  <header>
-    <div><h1>RAGOps Hub</h1><p>多租户企业知识库 RAG + 客服 Agent 工程样板</p></div>
-    <span class="badge">FastAPI · Hybrid RAG · SSE · Milvus-ready</span>
+<body data-view="workbench">
+  <header class="app-header">
+    <a class="brand" href="#workbench" aria-label="RAGOps Hub 工作台">
+      <span><strong>RAGOps Hub</strong><small>企业售后客服 Copilot</small></span>
+    </a>
+    <nav class="top-nav" aria-label="主导航">
+      <button class="nav-item is-active" data-view="workbench">客服工作台</button>
+      <button class="nav-item" data-view="knowledge">知识运营</button>
+      <button class="nav-item" data-view="operations">运行评测</button>
+    </nav>
+    <div class="agent-profile">
+      <span class="presence" aria-hidden="true"></span>
+      <span class="avatar">陈</span>
+      <span><strong>陈雨</strong><small>客服一组 · 在线</small></span>
+    </div>
   </header>
-  <div class="grid">
-    <aside class="card panel">
-      <h2>身份与知识库</h2>
-      <label>Tenant ID</label><input id="tenant" value="demo-company">
-      <label>User ID</label><input id="user" value="demo-user">
-      <label>Department</label><input id="department" value="customer-service">
-      <label>上传文档</label><input id="file" type="file" accept=".txt,.md,.pdf,.docx">
-      <label>可见范围</label><select id="visibility"><option value="department">部门</option><option value="public">企业公开</option><option value="private">仅本人</option></select>
-      <div class="row" style="margin-top:10px"><button onclick="uploadDocument()">上传并入库</button><button class="secondary" onclick="checkHealth()">健康检查</button></div>
-      <div id="status"></div>
-      <h2 style="margin-top:24px">演示问题</h2>
-      <div class="examples">
-        <button onclick="ask('企业专业版如何申请退款？')">企业专业版如何申请退款？</button>
-        <button onclick="ask('查询订单 ORD-1001 的状态')">查询订单 ORD-1001 的状态</button>
-        <button onclick="ask('产品出现故障，请帮我创建工单')">创建售后工单</button>
-        <button onclick="ask('确认')">确认待提交工单</button>
+
+  <main>
+    <section id="workbench-view" class="view is-active" aria-labelledby="workbench-title">
+      <h1 id="workbench-title" class="sr-only">客服工作台</h1>
+      <div class="workbench-shell">
+        <aside class="case-column" aria-label="会话队列">
+          <div class="column-heading">
+            <div><p class="eyebrow">今日待处理</p><h2>客户会话</h2></div>
+            <span id="case-count" class="count-badge">0</span>
+          </div>
+          <label class="search-box" for="case-search">
+            <span>搜索</span>
+            <input id="case-search" type="search" placeholder="客户、公司或问题">
+          </label>
+          <div class="queue-filter" role="group" aria-label="会话筛选">
+            <button class="filter-chip is-active" data-filter="all">全部</button>
+            <button class="filter-chip" data-filter="high">高优先级</button>
+            <button class="filter-chip" data-filter="waiting">待跟进</button>
+          </div>
+          <div id="case-list" class="case-list" aria-live="polite"></div>
+        </aside>
+
+        <section class="conversation-column" aria-label="当前客户会话">
+          <header class="conversation-header">
+            <div>
+              <div class="title-row">
+                <h2 id="conversation-title">正在加载会话…</h2>
+                <span id="priority-badge" class="priority-badge"></span>
+              </div>
+              <p id="conversation-meta">请稍候</p>
+            </div>
+            <div class="header-actions">
+              <button id="quick-order" class="button secondary">查询订单</button>
+              <button id="quick-ticket" class="button primary">转技术工单</button>
+            </div>
+          </header>
+
+          <div id="messages" class="messages" aria-live="polite" aria-label="对话消息"></div>
+
+          <div class="suggested-actions" aria-label="建议动作">
+            <span>快捷处理</span>
+            <button data-prompt="查询订单 ORD-1001 的当前状态和服务有效期">查订单与服务期</button>
+            <button data-prompt="企业知识库专业版登录失败时应该如何排查？">检索故障知识</button>
+            <button data-prompt="请为当前客户创建工单，类型为技术支持">准备升级工单</button>
+          </div>
+
+          <form id="composer" class="composer">
+            <label class="sr-only" for="message-input">回复客户</label>
+            <textarea id="message-input" rows="2" placeholder="输入回复，或让 Copilot 查询知识、订单并准备工单"></textarea>
+            <div class="composer-footer">
+              <p id="composer-status" role="status">回答会附带可核验来源；创建工单前必须人工确认。</p>
+              <button id="send-button" class="button primary" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="context-column" aria-label="客户业务上下文">
+          <section class="context-section customer-summary">
+            <div class="section-heading"><h2>客户信息</h2><span id="customer-level" class="level-badge">—</span></div>
+            <div class="customer-identity">
+              <span id="customer-avatar" class="large-avatar">客</span>
+              <div><strong id="customer-name">—</strong><p id="customer-company">—</p></div>
+            </div>
+            <dl class="detail-list">
+              <div><dt>行业</dt><dd id="customer-industry">—</dd></div>
+              <div><dt>规模</dt><dd id="customer-size">—</dd></div>
+              <div><dt>电话</dt><dd id="customer-phone">—</dd></div>
+              <div><dt>邮箱</dt><dd id="customer-email">—</dd></div>
+            </dl>
+          </section>
+
+          <section class="context-section">
+            <div class="section-heading"><h2>订单与订阅</h2><span id="order-status" class="status-badge">—</span></div>
+            <div class="order-title"><strong id="order-product">—</strong><span id="order-version">—</span></div>
+            <dl class="detail-list compact">
+              <div><dt>订单号</dt><dd id="order-id">—</dd></div>
+              <div><dt>服务期</dt><dd id="order-period">—</dd></div>
+              <div><dt>合同金额</dt><dd id="order-amount">—</dd></div>
+            </dl>
+            <div id="entitlements" class="entitlements"></div>
+          </section>
+
+          <section id="action-panel" class="context-section action-panel">
+            <p class="eyebrow">受控操作</p>
+            <h2>建议创建技术支持工单</h2>
+            <p id="action-description">确认问题需要升级后，Copilot 会先生成待提交内容，只有人工确认才会写入工单系统。</p>
+            <div id="pending-details" class="pending-details" hidden></div>
+            <div class="action-buttons">
+              <button id="prepare-ticket" class="button primary">准备工单</button>
+              <button id="cancel-ticket" class="button secondary" hidden>取消</button>
+              <button id="confirm-ticket" class="button danger" hidden>确认创建</button>
+            </div>
+          </section>
+        </aside>
       </div>
-    </aside>
-    <section class="card chat">
-      <div id="messages"><div class="message assistant">请先上传样例知识文档，或者直接尝试订单查询与工单工具。</div></div>
-      <div class="composer"><textarea id="input" placeholder="输入知识问题、订单号或工单诉求"></textarea><button onclick="send()">发送</button></div>
     </section>
-  </div>
-</main>
-<script>
-const conversationId = crypto.randomUUID();
-const headers = () => ({"Content-Type":"application/json","X-Tenant-ID":tenant.value,"X-User-ID":user.value,"X-Department-ID":department.value});
-const addMessage = (text, role) => { const node=document.createElement('div'); node.className=`message ${role}`; node.textContent=text; messages.appendChild(node); messages.scrollTop=messages.scrollHeight; return node; };
-function ask(text){ input.value=text; send(); }
-async function send(){
-  const text=input.value.trim(); if(!text)return; input.value=''; addMessage(text,'user'); const output=addMessage('','assistant');
-  const response=await fetch('/api/v1/chat/stream',{method:'POST',headers:headers(),body:JSON.stringify({message:text,conversation_id:conversationId})});
-  const reader=response.body.getReader(), decoder=new TextDecoder(); let buffer='';
-  while(true){ const {value,done}=await reader.read(); if(done)break; buffer+=decoder.decode(value,{stream:true}); const blocks=buffer.split('\n\n'); buffer=blocks.pop();
-    for(const block of blocks){ const lines=block.split('\n'); const event=(lines.find(x=>x.startsWith('event:'))||'').slice(6).trim(); const raw=(lines.find(x=>x.startsWith('data:'))||'').slice(5).trim(); if(!raw)continue; const data=JSON.parse(raw); if(event==='text_delta')output.textContent+=data.content; if(event==='error')output.textContent+=`\n错误：${data.message}`; }
-  }
-}
-async function uploadDocument(){ const selected=file.files[0]; if(!selected){status.textContent='请选择文件';return;} const form=new FormData(); form.append('file',selected); form.append('visibility',visibility.value); form.append('version','1'); status.textContent='正在解析和入库…'; const auth=headers(); delete auth['Content-Type']; const response=await fetch('/api/v1/documents',{method:'POST',headers:auth,body:form}); status.textContent=JSON.stringify(await response.json()); }
-async function checkHealth(){ status.textContent=JSON.stringify(await (await fetch('/api/v1/health')).json()); }
-input.addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send();} });
-</script>
+
+    <section id="knowledge-view" class="view page-view" aria-labelledby="knowledge-title">
+      <header class="page-heading">
+        <div><p class="eyebrow">Knowledge Operations</p><h1 id="knowledge-title">知识运营</h1><p>维护客服可用知识，并在发布前验证召回结果与引用内容。</p></div>
+        <button id="refresh-documents" class="button secondary">刷新列表</button>
+      </header>
+      <div class="operations-grid">
+        <section class="surface upload-surface">
+          <h2>上传业务知识</h2>
+          <p>支持 PDF、Word、Markdown、TXT；入库后按租户和可见范围参与检索。</p>
+          <form id="upload-form">
+            <label for="document-file">选择文件</label>
+            <input id="document-file" type="file" accept=".txt,.md,.pdf,.docx" required>
+            <label for="document-visibility">可见范围</label>
+            <select id="document-visibility">
+              <option value="department">客服部门</option>
+              <option value="public">全企业</option>
+              <option value="private">仅上传人</option>
+            </select>
+            <button class="button primary" type="submit">解析并入库</button>
+            <p id="upload-status" role="status"></p>
+          </form>
+        </section>
+        <section class="surface retrieval-surface">
+          <h2>检索验收</h2>
+          <p>用真实客服问法验证 Dense、BM25 融合后的候选与来源。</p>
+          <form id="search-form" class="inline-form">
+            <label class="sr-only" for="search-query">检索问题</label>
+            <input id="search-query" value="企业知识库专业版登录失败时应该如何排查？">
+            <button class="button primary" type="submit">运行检索</button>
+          </form>
+          <div id="search-results" class="search-results"></div>
+        </section>
+      </div>
+      <section class="surface document-surface">
+        <div class="section-heading"><div><h2>已发布文档</h2><p>当前身份可访问的文档与版本。</p></div><span id="document-count" class="count-badge">0</span></div>
+        <div id="document-list" class="table-wrap"></div>
+      </section>
+    </section>
+
+    <section id="operations-view" class="view page-view" aria-labelledby="operations-title">
+      <header class="page-heading">
+        <div><p class="eyebrow">Runtime & Evaluation</p><h1 id="operations-title">运行评测</h1><p>查看本地演示环境健康度、核心业务量与最近审计轨迹。</p></div>
+        <button id="refresh-operations" class="button secondary">刷新数据</button>
+      </header>
+      <div id="health-banner" class="health-banner">正在检查服务状态…</div>
+      <div id="metric-grid" class="metric-grid"></div>
+      <div class="operations-grid lower-grid">
+        <section class="surface">
+          <div class="section-heading"><div><h2>离线检索基线</h2><p>示例集仅用于验证链路，不代表生产效果。</p></div><span class="status-badge">Baseline</span></div>
+          <div class="evaluation-cards">
+            <div><span>Source Recall@K</span><strong>1.00</strong></div>
+            <div><span>MRR</span><strong>1.00</strong></div>
+            <div><span>评测题数</span><strong>5</strong></div>
+          </div>
+          <p class="notice">进入业务验收前，应使用脱敏真实问法扩展评测集，并加入无答案、权限和对抗样本。</p>
+        </section>
+        <section class="surface">
+          <div class="section-heading"><div><h2>最近审计</h2><p>工具调用、确认与安全拦截都会留下记录。</p></div></div>
+          <div id="audit-list" class="audit-list"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="source-dialog" class="source-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="关闭来源预览">关闭</button></form>
+    <p class="eyebrow">引用来源</p>
+    <h2 id="source-title">来源预览</h2>
+    <p id="source-meta" class="source-meta"></p>
+    <div id="source-content" class="source-content"></div>
+  </dialog>
+
+  <script src="/static/app.js" defer></script>
 </body>
 </html>

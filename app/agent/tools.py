@@ -19,13 +19,24 @@ class CustomerServiceTools:
         return {"ok": True, "order": order}
 
     async def prepare_ticket(
-        self, principal: Principal, conversation_id: str, subject: str, description: str
+        self,
+        principal: Principal,
+        conversation_id: str,
+        subject: str,
+        description: str,
+        *,
+        case_id: str = "",
+        order_id: str = "",
+        customer_user_id: str = "",
     ) -> dict[str, object]:
         action = {
             "action_id": str(uuid.uuid4()),
             "type": "create_ticket",
             "subject": subject[:120],
             "description": description[:2000],
+            "case_id": case_id,
+            "order_id": order_id,
+            "customer_user_id": customer_user_id,
         }
         self.repository.set_pending_action(conversation_id, principal, action)
         self.repository.audit(
@@ -47,7 +58,17 @@ class CustomerServiceTools:
             subject=action["subject"],
             description=action["description"],
             idempotency_key=idempotency_key,
+            customer_user_id=str(action.get("customer_user_id", "")),
+            case_id=str(action.get("case_id", "")),
+            order_id=str(action.get("order_id", "")),
         )
+        case_id = str(action.get("case_id", ""))
+        if case_id:
+            self.repository.mark_support_case_escalated(
+                principal,
+                case_id,
+                str(ticket["id"]),
+            )
         self.repository.clear_pending_action(
             conversation_id,
             principal,
@@ -55,3 +76,27 @@ class CustomerServiceTools:
         )
         self.repository.audit(principal, "ticket.create", "ticket", ticket["id"])
         return {"ok": True, "ticket": ticket}
+
+    async def cancel_pending(
+        self,
+        principal: Principal,
+        conversation_id: str,
+    ) -> dict[str, object]:
+        action = self.repository.get_pending_action(conversation_id, principal)
+        if not action:
+            return {"ok": False, "error": "当前没有待确认操作"}
+        action_id = str(action.get("action_id", ""))
+        cleared = self.repository.clear_pending_action(
+            conversation_id,
+            principal,
+            action_id,
+        )
+        if cleared:
+            self.repository.audit(
+                principal,
+                "ticket.cancel",
+                "conversation",
+                conversation_id,
+                {"action_id": action_id},
+            )
+        return {"ok": cleared, "status": "cancelled" if cleared else "not_found"}
