@@ -1,0 +1,6 @@
+{"id":"q1","query":"首次购买企业版后几天内可以申请退款？","expected_source":"refund-policy.md","expected_terms":["7个自然日"]}
+{"id":"q2","query":"退款审核通过后多久能到账？","expected_source":"refund-policy.md","expected_terms":["3至7个工作日"]}
+{"id":"q3","query":"部门文档谁可以查看？","expected_source":"security-handbook.md","expected_terms":["所属部门"]}
+{"id":"q4","query":"上传文件支持哪些格式？","expected_source":"product-guide.md","expected_terms":["PDF","Word","Markdown"]}
+{"id":"q5","query":"创建工单为什么要确认？","expected_source":"product-guide.md","expected_terms":["有副作用","二次确认"]}
+

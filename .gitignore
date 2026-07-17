@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+data/*.db
+data/uploads/
+data/milvus/
+*.pyc
+.DS_Store
+

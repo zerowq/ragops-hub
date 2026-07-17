@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAGOps Hub</title>
+  <style>
+    :root { color-scheme: light; --ink:#102338; --muted:#637285; --line:#dce4ec; --brand:#176b87; --soft:#edf7f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif; background:#f5f7fa; color:var(--ink); }
+    main { max-width:1120px; margin:0 auto; padding:32px 20px 56px; }
+    header { display:flex; justify-content:space-between; gap:20px; align-items:end; margin-bottom:24px; }
+    h1 { margin:0; font-size:30px; letter-spacing:-.5px; }
+    header p { margin:7px 0 0; color:var(--muted); }
+    .badge { background:var(--soft); color:var(--brand); padding:8px 12px; border-radius:999px; font-weight:600; font-size:13px; }
+    .grid { display:grid; grid-template-columns:340px 1fr; gap:18px; }
+    .card { background:white; border:1px solid var(--line); border-radius:16px; box-shadow:0 12px 35px rgba(27,52,75,.06); overflow:hidden; }
+    .panel { padding:20px; }
+    h2 { font-size:17px; margin:0 0 14px; }
+    label { display:block; font-size:12px; color:var(--muted); margin:12px 0 5px; }
+    input, select, textarea { width:100%; border:1px solid #cfd8e2; border-radius:9px; padding:10px 11px; font:inherit; background:white; }
+    button { border:0; background:var(--brand); color:white; padding:10px 15px; border-radius:9px; font-weight:650; cursor:pointer; }
+    button.secondary { background:#e9eef3; color:var(--ink); }
+    .row { display:flex; gap:8px; align-items:center; }
+    .chat { height:550px; display:flex; flex-direction:column; }
+    #messages { flex:1; overflow:auto; padding:20px; background:linear-gradient(#fbfcfd,#f7fafc); }
+    .message { max-width:84%; padding:11px 13px; border-radius:13px; margin:0 0 12px; line-height:1.55; white-space:pre-wrap; }
+    .user { margin-left:auto; background:#176b87; color:white; border-bottom-right-radius:3px; }
+    .assistant { background:white; border:1px solid var(--line); border-bottom-left-radius:3px; }
+    .events { font-size:11px; color:var(--muted); margin-top:6px; }
+    .composer { border-top:1px solid var(--line); padding:14px; display:grid; grid-template-columns:1fr auto; gap:10px; }
+    .composer textarea { min-height:46px; max-height:110px; resize:vertical; }
+    #status { min-height:18px; margin-top:10px; font-size:12px; color:var(--muted); }
+    .examples button { display:block; width:100%; text-align:left; margin:7px 0; background:#f3f6f8; color:var(--ink); font-weight:500; }
+    @media (max-width:800px) { .grid { grid-template-columns:1fr; } .chat { height:620px; } header { align-items:start; flex-direction:column; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>RAGOps Hub</h1><p>多租户企业知识库 RAG + 客服 Agent 工程样板</p></div>
+    <span class="badge">FastAPI · Hybrid RAG · SSE · Milvus-ready</span>
+  </header>
+  <div class="grid">
+    <aside class="card panel">
+      <h2>身份与知识库</h2>
+      <label>Tenant ID</label><input id="tenant" value="demo-company">
+      <label>User ID</label><input id="user" value="demo-user">
+      <label>Department</label><input id="department" value="customer-service">
+      <label>上传文档</label><input id="file" type="file" accept=".txt,.md,.pdf,.docx">
+      <label>可见范围</label><select id="visibility"><option value="department">部门</option><option value="public">企业公开</option><option value="private">仅本人</option></select>
+      <div class="row" style="margin-top:10px"><button onclick="uploadDocument()">上传并入库</button><button class="secondary" onclick="checkHealth()">健康检查</button></div>
+      <div id="status"></div>
+      <h2 style="margin-top:24px">演示问题</h2>
+      <div class="examples">
+        <button onclick="ask('企业专业版如何申请退款？')">企业专业版如何申请退款？</button>
+        <button onclick="ask('查询订单 ORD-1001 的状态')">查询订单 ORD-1001 的状态</button>
+        <button onclick="ask('产品出现故障，请帮我创建工单')">创建售后工单</button>
+        <button onclick="ask('确认')">确认待提交工单</button>
+      </div>
+    </aside>
+    <section class="card chat">
+      <div id="messages"><div class="message assistant">请先上传样例知识文档，或者直接尝试订单查询与工单工具。</div></div>
+      <div class="composer"><textarea id="input" placeholder="输入知识问题、订单号或工单诉求"></textarea><button onclick="send()">发送</button></div>
+    </section>
+  </div>
+</main>
+<script>
+const conversationId = crypto.randomUUID();
+const headers = () => ({"Content-Type":"application/json","X-Tenant-ID":tenant.value,"X-User-ID":user.value,"X-Department-ID":department.value});
+const addMessage = (text, role) => { const node=document.createElement('div'); node.className=`message ${role}`; node.textContent=text; messages.appendChild(node); messages.scrollTop=messages.scrollHeight; return node; };
+function ask(text){ input.value=text; send(); }
+async function send(){
+  const text=input.value.trim(); if(!text)return; input.value=''; addMessage(text,'user'); const output=addMessage('','assistant');
+  const response=await fetch('/api/v1/chat/stream',{method:'POST',headers:headers(),body:JSON.stringify({message:text,conversation_id:conversationId})});
+  const reader=response.body.getReader(), decoder=new TextDecoder(); let buffer='';
+  while(true){ const {value,done}=await reader.read(); if(done)break; buffer+=decoder.decode(value,{stream:true}); const blocks=buffer.split('\n\n'); buffer=blocks.pop();
+    for(const block of blocks){ const lines=block.split('\n'); const event=(lines.find(x=>x.startsWith('event:'))||'').slice(6).trim(); const raw=(lines.find(x=>x.startsWith('data:'))||'').slice(5).trim(); if(!raw)continue; const data=JSON.parse(raw); if(event==='text_delta')output.textContent+=data.content; if(event==='error')output.textContent+=`\n错误：${data.message}`; }
+  }
+}
+async function uploadDocument(){ const selected=file.files[0]; if(!selected){status.textContent='请选择文件';return;} const form=new FormData(); form.append('file',selected); form.append('visibility',visibility.value); form.append('version','1'); status.textContent='正在解析和入库…'; const auth=headers(); delete auth['Content-Type']; const response=await fetch('/api/v1/documents',{method:'POST',headers:auth,body:form}); status.textContent=JSON.stringify(await response.json()); }
+async function checkHealth(){ status.textContent=JSON.stringify(await (await fetch('/api/v1/health')).json()); }
+input.addEventListener('keydown',event=>{ if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send();} });
+</script>
+</body>
+</html>
